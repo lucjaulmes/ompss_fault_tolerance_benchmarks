@@ -1,0 +1,3 @@
+- undo error injections in points
+- output check only based on assignment
+	- done: check refactor
