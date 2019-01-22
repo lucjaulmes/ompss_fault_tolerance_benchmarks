@@ -32,6 +32,7 @@ void __parsec_roi_begin () __attribute__ ((noinline, alias ("start_roi")));
 void __parsec_roi_end () __attribute__ ((noinline, alias ("stop_roi")));
 
 
+#ifndef DISABLE_MEMORY_INSTRUMENTATION
 #ifdef CATCHROI_OVERRIDE_NAMES
 
 /* Undef the names of common memory functions, so we can access the normal names (only in this file) */
@@ -98,7 +99,7 @@ void* CATCHROI_INSTRUMENT(memalign)(size_t align, size_t size)
 	return ptr;
 }
 
-int   CATCHROI_INSTRUMENT(posix_memalign)(void **ptr, size_t align, size_t size)
+int CATCHROI_INSTRUMENT(posix_memalign)(void **ptr, size_t align, size_t size)
 {
 	int ret = posix_memalign(ptr, align, size);
 	register_target_region(alloc_counter, *ptr, size);
@@ -106,7 +107,7 @@ int   CATCHROI_INSTRUMENT(posix_memalign)(void **ptr, size_t align, size_t size)
 	return ret;
 }
 
-void  CATCHROI_INSTRUMENT(free)(void *ptr)
+void CATCHROI_INSTRUMENT(free)(void *ptr)
 {
 	free(ptr);
 }
@@ -125,4 +126,4 @@ int   CATCHROI_INSTRUMENT(munmap)(void *ptr, size_t free_size)
 	return munmap(ptr, free_size);
 }
 
-
+#endif // DISABLE_MEMORY_INSTRUMENTATION

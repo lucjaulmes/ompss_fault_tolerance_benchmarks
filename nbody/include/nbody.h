@@ -13,7 +13,13 @@
 #define STR(s) #s
 #define XSTR(s) STR(s)
 
+#ifdef _OMPSS
+#ifndef TASKLOOP
 #define TASKLOOP 1
+#endif
+#else
+#define TASKLOOP 0
+#endif
 
 // Define macros to make the code cleaner: OMP_TASK(blah) is #pragma omp task blah
 // with the macros inside blah expanded to their values.

@@ -2,31 +2,38 @@ CC=gcc
 CFLAGS=-g -O3 -fPIC -Wall -Wextra -std=gnu11
 ARFLAGS=rcs
 
-libs=libcatchroi.a libcatchroi.so
-headers=catchroi.h
+LIBS:=libcatchroi.a libcatchroi.so
+HEADERS:=catchroi.h
 
-make:$(libs)
+make:$(LIBS)
 %.so:LDFLAGS+=-shared -pthread
 
 CATCHROI_HOME?=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 DESTDIR?=$(CATCHROI_HOME)
 
-lib%.a:%.o inject_err.o
+ifeq ($(INJECT),1)
+INJECT_OBJ=inject_err.o
+else
+INJECT_OBJ=
+CPPFLAGS+=-DDISABLE_ERROR_INJECTION
+endif
+
+lib%.a:%.o $(INJECT_OBJ)
 	$(AR) $(ARFLAGS) $@ $^
 
-lib%.so:%.o inject_err.o
+lib%.so:%.o $(INJECT_OBJ)
 	$(LINK.o) $^ -o $@
 
 clean:
-	@rm -vf $(libs)
+	@rm -vf $(LIBS)
 
-install:$(libs) $(headers)
+install:$(LIBS) $(HEADERS)
 	@mkdir -p $(DESTDIR)/lib $(DESTDIR)/include
-	@cp -v $(libs) $(DESTDIR)/lib
-	@cp -v $(headers) $(DESTDIR)/include
+	@cp -v $(LIBS) $(DESTDIR)/lib
+	@cp -v $(HEADERS) $(DESTDIR)/include
 
 uninstall:
-	@rm -v $(addprefix $(DESTDIR)/lib/, $(libs)) $(addprefix $(DESTDIR)/include/, $(headers))
+	@rm -v $(addprefix $(DESTDIR)/lib/, $(LIBS)) $(addprefix $(DESTDIR)/include/, $(HEADERS))
 	@rmdir --ignore-fail-on-non-empty $(DESTDIR)/lib $(DESTDIR)/include
 
 .PHONY: make clean install uninstall

@@ -9,6 +9,8 @@ void start_roi();
 void stop_roi(int it);
 
 
+#ifndef DISABLE_MEMORY_INSTRUMENTATION
+
 
 #define PASTE_PREFIX(a, b) a ## b
 #define CATCHROI_INSTRUMENT(f) PASTE_PREFIX(_libcatchroi_, f)
@@ -44,6 +46,13 @@ int   CATCHROI_INSTRUMENT(munmap)(void*, size_t);
 #define munmap(...)           CATCHROI_INSTRUMENT(munmap)(__VA_ARGS__)
 
 #endif // CATCHROI_OVERRIDE_NAMES
+
+
+
+#else  // DISABLE_MEMORY_INSTRUMENTATION
+#define CATCHROI_INSTRUMENT(f) f
+#endif
+
 
 
 #ifdef __cplusplus

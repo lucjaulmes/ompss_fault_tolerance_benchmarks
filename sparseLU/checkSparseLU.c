@@ -202,7 +202,7 @@ void fwd(int BS, float (*diag)[BS], float (*col)[BS])
 #pragma omp task in([BS]A) out([BS]L, [BS]U)
 void split_block(int BS, float (*A)[BS], float (*L)[BS], float (*U)[BS])
 {
-	int i, j, k;
+	int i, j;
 
 	for (i = 0; i < BS; i++)
 		for (j = 0; j < BS; j++)

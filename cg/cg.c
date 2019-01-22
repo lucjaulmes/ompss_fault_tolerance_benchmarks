@@ -88,7 +88,7 @@ void recompute_gradient(const Matrix *A, double *gradient, double *iterate, cons
 		int s = get_block_start(i), e = get_block_end(i);
 
 		// Aiterate <- A * iterate
-		#pragma omp task in(A->r[s:e-1], A->c[A->r[s]:A->r[e]-1], A->v[A->r[s]:A->r[e]-1], {iterate[get_block_start(b):get_block_end(b)-1], b=0:nb_blocks-1}, b[s:e-1]) out(gradient[s:e-1]) firstprivate(s, e) label(recompute_gradient) priority(10) no_copy_deps
+		#pragma omp task in(A->r[s:e-1], A->c[A->r[s]:A->r[e]-1], A->v[A->r[s]:A->r[e]-1], {iterate[get_block_start(blk):get_block_end(blk)-1], blk=0:nb_blocks-1}, b[s:e-1]) out(gradient[s:e-1]) firstprivate(s, e) label(recompute_gradient) priority(10) no_copy_deps
 		{
 			for (int l = s; l < e; l++)
 			{

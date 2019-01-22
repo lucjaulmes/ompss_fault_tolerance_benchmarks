@@ -3,6 +3,11 @@
 .build_instr
 .build_perf
 
+# default install location
+/libcatchroi/include
+/libcatchroi/lib
+bin
+
 # Object files
 *.o
 *.ko

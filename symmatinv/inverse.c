@@ -554,6 +554,8 @@ static int check_inverse(int nt, int ts, int n, REAL **Ah, REAL *matrix, char up
 
 	free(product);
 	free(inverse);
+
+	return info_inverse;
 }
 
 
@@ -735,7 +737,7 @@ void read_matrix(char *filename, int n, REAL matrix[n][n], REAL *checksum)
 				matrix[i][j] = sum;
 			}
 
-		add_to_diag(matrix, n, (REAL) n);
+		add_to_diag((REAL*)matrix, n, (REAL) n);
 
 		*checksum = 0.0;
 	}
@@ -1042,7 +1044,7 @@ int main(int argc, char *argv[])
 	float time = get_time();
 	start_roi();
 
-	cholesky_inverse(ts, nt, (REAL(*)[nt])Ah);
+	cholesky_inverse(ts, nt, (REAL*(*)[nt])Ah);
 
 	stop_roi(-1);
 	time = get_time() - time;

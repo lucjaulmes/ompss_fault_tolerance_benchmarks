@@ -239,6 +239,7 @@ int main(int argc, char **argv)
 	const double *flat_points = load_from_file(infile, &p, &d);
 
 	const int n_points = p, dim = d, chunk_size = (n_points + nblocks - 1) / nblocks;
+	(void)chunk_size;
 
 	// Cast points now we now dim, allocate, and initialize to all-0s, except assignment to all-1s because 0 is a valid assignment
 	const double (*points)[dim] = (double(*)[dim])flat_points;
