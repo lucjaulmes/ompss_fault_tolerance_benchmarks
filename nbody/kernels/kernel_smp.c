@@ -1,8 +1,9 @@
-#include "nbody.h"
 #include <math.h>
 #include <stdbool.h>
 #include <strings.h>
 #include <string.h>
+
+#include "nbody.h"
 
 static const float gravitational_constant =  6.6726e-11; /* N(m/kg)2 */
 

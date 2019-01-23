@@ -15,7 +15,7 @@ endif
 
 
 # Main target
-TARGET:=bin/nbody_$(VERSION)_$(BIGO)
+TARGET:=nbody_$(VERSION)_$(BIGO)
 
 
 # Source files, based on version and compiler

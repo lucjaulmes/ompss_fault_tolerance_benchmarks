@@ -48,20 +48,5 @@ static inline int get_block_end(const int b)
 static inline int world_block(const int b) {return b;}
 static inline double *localrank_ptr(double *p) {return p;}
 
-// these are defined here so that they are compiled with mcc
-#ifndef _OMPSS
-static inline int get_num_threads() { return 1; }
-static inline int get_thread_num()  { return 0; }
-static inline void set_num_threads(int t UNUSED)
-{
-	fprintf(stderr, "In sequential CG, num_threads can't be set, it is fixed to 1.\n");
-	exit(2);
-}
-#else
-#define get_num_threads  nanos_omp_get_num_threads
-#define get_thread_num   nanos_omp_get_thread_num
-#define set_num_threads  nanos_omp_set_num_threads
-#endif
-
 #endif // GLOBAL_H_INCLUDED
 

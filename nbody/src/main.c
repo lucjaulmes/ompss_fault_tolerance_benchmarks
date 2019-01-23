@@ -1,6 +1,3 @@
-/* nbody.c */
-
-#include "nbody.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <err.h>
@@ -11,6 +8,8 @@
 	#include <mpi.h>
 #endif
 
+#include "nbody.h"
+
 static const float default_domain_size_x = 1.0e+10; /* m  */
 static const float default_domain_size_y = 1.0e+10; /* m  */
 static const float default_domain_size_z = 1.0e+10; /* m  */
@@ -20,6 +19,10 @@ static const int   default_seed          = 12345;
 static const char *default_name          = "data/nbody_soa";
 static const int   default_num_particles = 16384;
 static const int   default_timesteps     = 10;
+
+#if TASKLOOP
+extern int GS; // grainsize
+#endif
 
 int main(int argc, char **argv)
 {

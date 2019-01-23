@@ -1,5 +1,4 @@
 /* nbody.c */
-#include "nbody.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +8,8 @@
 #if USE_MPI
 	#include <mpi.h>
 #endif
+
+#include "nbody.h"
 
 int GS;
 

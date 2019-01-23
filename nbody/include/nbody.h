@@ -13,12 +13,12 @@
 #define STR(s) #s
 #define XSTR(s) STR(s)
 
+
 #ifdef _OMPSS
-#ifndef TASKLOOP
-#define TASKLOOP 1
-#endif
-#else
-#define TASKLOOP 0
+# ifndef TASKLOOP
+#  define TASKLOOP 1
+# endif
+extern int GS;
 #endif
 
 // Define macros to make the code cleaner: OMP_TASK(blah) is #pragma omp task blah
@@ -26,13 +26,8 @@
 #define EVAL_PRAGMA(x) _Pragma (#x)
 #define DO_PRAGMA(x) EVAL_PRAGMA(x)
 
-
-#if TASKLOOP
-	extern int GS; // grainsize
-	// round up(size / block) - 1 => (size + block - 1) / block - 1
-	#define ALL_BLOCKS(arr, size, block) {arr[j*block;block], j=0:(size - 1)/block}
-	int nanos_omp_get_num_threads();
-#endif
+// round up(size / block) - 1 => (size + block - 1) / block - 1
+#define ALL_BLOCKS(arr, size, block) {arr[j*block;block], j=0:(size - 1)/block}
 
 
 typedef struct
