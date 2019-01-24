@@ -15,7 +15,7 @@ MCXX = smpcxx --cxx=$(CXX)
 
 CFLAGS = -O$(O) -std=gnu11 -Wall -Wextra -rdynamic -g -fno-optimize-sibling-calls
 CXXFLAGS = -O$(O) -std=gnu++11 -Wall -Wextra -rdynamic -g -fno-optimize-sibling-calls
-OMPSSFLAGS = --ompss --Wn,-Wno-unused-parameter,-Wno-unused-but-set-variable,-Wno-unused-variable,-Wno-unused-function,-Wno-discarded-array-qualifiers -D_Float128=__float128
+OMPSSFLAGS = --ompss --Wn,-Wno-unused-parameter,-Wno-unused-but-set-variable,-Wno-unused-variable,-Wno-unused-function,-Wno-discarded-array-qualifiers
 CPPFLAGS = -I$(CATCHROI_HOME)/include
 LDFLAGS = -L$(CATCHROI_HOME)/lib -Wl,-rpath,$(CATCHROI_HOME)/lib
 LDLIBS = -lcatchroi
@@ -46,34 +46,66 @@ O = 3
 %_instr.o:OMPSSFLAGS += --keep-all-files --output-dir=.build_instr --instrument
 %_debug.o:OMPSSFLAGS += --keep-all-files --output-dir=.build_debug --debug
 
-define COMPILATION_RULES
+define C_COMPILATION
 $(MCC) $(CFLAGS) $(OMPSSFLAGS) $(CPPFLAGS) $< -c -o $@
 endef
 
-define LINKING_RULES
+define CXX_COMPILATION
+$(MCXX) $(CXXFLAGS) $(OMPSSFLAGS) $(CPPFLAGS) $< -c -o $@
+endef
+
+
+define C_LINKING
 $(MCC) $(CFLAGS) $(OMPSSFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 endef
 
+define CXX_LINKING
+$(MCXX) $(CXXFLAGS) $(OMPSSFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+endef
+
+
+
 # main target is perf and has no suffix
-bin/$(TARGET): $(OMP_SRC:.c=_perf.o) $(SEQ_SRC:.c=_seq.o) | bin
-	$(LINKING_RULES)
+bin/$(TARGET): $(addsuffix _perf.o, $(basename $(OMP_SRC))) $(addsuffix _seq.o, $(basename $(SEQ_SRC))) | bin
+ifeq ($(filter-out %.c , $(OMP_SRC) $(SEQ_SRC)),)
+	$(C_LINKING)
+else
+	$(CXX_LINKING)
+endif
 
 # all other targets {main target}_{suffix} have {source file}_{suffix}.o objects
-bin/$(TARGET)_%: $(OMP_SRC:.c=_%.o) $(SEQ_SRC:.c=_seq.o) | bin
-	$(LINKING_RULES)
+bin/$(TARGET)_%: $(addsuffix _%.o, $(basename $(OMP_SRC))) $(addsuffix _seq.o, $(basename $(SEQ_SRC))) | bin
+ifeq ($(filter-out %.c , $(OMP_SRC) $(SEQ_SRC)),)
+	$(C_LINKING)
+else
+	$(CXX_LINKING)
+endif
+
 
 # build objects
 %_seq.o: %.c
-	$(COMPILATION_RULES)
+	$(C_COMPILATION)
 
 %_perf.o: %.c | .build_perf
-	$(COMPILATION_RULES)
+	$(C_COMPILATION)
 
 %_instr.o: %.c | .build_instr
-	$(COMPILATION_RULES)
+	$(C_COMPILATION)
 
 %_debug.o: %.c | .build_debug
-	$(COMPILATION_RULES)
+	$(C_COMPILATION)
+
+%_seq.o: %.cc
+	$(CXX_COMPILATION)
+
+%_perf.o: %.cc | .build_perf
+	$(CXX_COMPILATION)
+
+%_instr.o: %.cc | .build_instr
+	$(CXX_COMPILATION)
+
+%_debug.o: %.cc | .build_debug
+	$(CXX_COMPILATION)
 
 # make directories.
 .build_%:
@@ -97,7 +129,11 @@ uninstall:
 	@rmdir --ignore-fail-on-non-empty $(DESTDIR)/bin
 
 .PRECIOUS: .build_perf .build_instr .build_debug bin
-.INTERMEDIATE: $(SEQ_SRC:.c=_seq.o) $(OMP_SRC:.c=_perf.o) $(OMP_SRC:.c=_instr.o) $(OMP_SRC:.c=_debug.o) $(OMP_SRC:.c=_seq.o)
+.INTERMEDIATE: $(addsuffix _seq.o, $(basename $(SEQ_SRC)))
+.INTERMEDIATE: $(addsuffix _perf.o, $(basename $(OMP_SRC)))
+.INTERMEDIATE: $(addsuffix _instr.o, $(basename $(OMP_SRC)))
+.INTERMEDIATE: $(addsuffix _debug.o, $(basename $(OMP_SRC)))
+.INTERMEDIATE: $(addsuffix _seq.o, $(basename $(OMP_SRC)))
 .PHONY: perf instr debug seq clean install uninstall extras
 
 ## After including file, adjust variables, e.g.:
