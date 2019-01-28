@@ -17,6 +17,13 @@ extern int GS; // grainsize
 
 nbody_conf_t parse_args(int argc, char *argv[])
 {
+	nbody_conf_t conf = {1e10 /* m */, 1e10 /* m */, 1e10 /* m */, 1e28 /* kg */, 1e0 /* s */,
+						  16384, 10, 12345, 0, "data/nbody_soa",
+#if TASKLOOP
+						  nanos_omp_get_num_threads(),
+#endif
+	};
+
 #define no_argument 0
 #define required_argument 1
 #define optional_argument 2
@@ -36,20 +43,23 @@ nbody_conf_t parse_args(int argc, char *argv[])
 #endif
 		{"check",		no_argument,		NULL, 'c'},
 		{"dump",		no_argument,		NULL, 'd'},
+		{"help",		no_argument,		NULL, 'h'},
 		{NULL,			0,					NULL, '\0'}
 	};
 
-	nbody_conf_t conf = {1e10 /* m */, 1e10 /* m */, 1e10 /* m */, 1e28 /* kg */, 1e0 /* s */,
-						  16384, 10, 12345, 0, "data/nbody_soa",
-#if TASKLOOP
-						  nanos_omp_get_num_threads(),
-#endif
-	};
+	char optstring[2 * sizeof(long_options) / sizeof(*long_options)], *optchar = optstring;
+	for (struct option *opt = long_options; opt->name != NULL; ++opt)
+	{
+		*optchar++ = opt->val;
+		if (opt->has_arg)
+			*optchar++ = ':';
+	}
+	*optchar = '\0';
 
 
 	for (int opt = 0; opt != -1;)
 	{
-		opt = getopt_long(argc, argv, "n:x:y:z:m:i:t:f:s:b:cd", long_options, NULL);
+		opt = getopt_long(argc, argv, optstring, long_options, NULL);
 		switch (opt) {
 			case 'n':
 				conf.num_particles = strtol(optarg, NULL, 0);
@@ -76,17 +86,28 @@ nbody_conf_t parse_args(int argc, char *argv[])
 				conf.seed = strtol(optarg, NULL, 0);
 				break;
 			case 'f':
-				conf.name = strndup(optarg, 1024);
+				conf.name = strndup(optarg, MAX_FILENAME_LEN);
+				break;
+			case 'd':
+				conf.check = DUMP_RESULT;
+				break;
+			case 'c':
+				conf.check = CHECK_RESULT;
 				break;
 #if TASKLOOP
 			case 'b':
 				conf.num_tasks = strtol(optarg, NULL, 0);
 				break;
 #endif
-			default:
-				// usage()
-				opt = -1;
+			case 0:
+			case -1:
 				break;
+			case 'h':
+			default:
+				printf("Usage: %s [options]\nPossible options are:\n", argv[0]);
+				for (struct option *opt = long_options; opt->name != NULL; ++opt)
+					printf("    -%c, --%s%*s\n", opt->val, opt->name, 15 - (int)strlen(opt->name), opt->has_arg ? " val":"");
+				exit(opt == '?' || opt == ':');
 		}
 	}
 
@@ -152,9 +173,9 @@ int main(int argc, char *argv[])
 	if (rank == 0)
 		printf("Total execution time: %g s\n", end - start);
 
-	if (conf.check == SAVE_FILE)
+	if (conf.check == DUMP_RESULT)
 		nbody_save_particles(&nbody);
-	else if (conf.check == CHECK_FILE)
+	else if (conf.check == CHECK_RESULT)
 		nbody_check(&nbody);
 
 	nbody_free(&nbody);

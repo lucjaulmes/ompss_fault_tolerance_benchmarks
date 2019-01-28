@@ -10,6 +10,8 @@
 
 #define PART 1024
 
+#define MAX_FILENAME_LEN 1024
+
 #define STR(s) #s
 #define XSTR(s) STR(s)
 
@@ -36,7 +38,7 @@ typedef struct
 	size_t check_size;
 	size_t position_offset;
 	size_t mass_offset;
-	char name[1000];
+	char name[MAX_FILENAME_LEN - 5];
 } nbody_file_t;
 
 typedef struct
@@ -56,8 +58,8 @@ typedef struct
 #endif
 } nbody_conf_t;
 
-#define SAVE_FILE 1
-#define CHECK_FILE 2
+#define DUMP_RESULT  1
+#define CHECK_RESULT 2
 
 typedef struct
 {

@@ -1,4 +1,3 @@
-#include "nbody.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -18,8 +17,10 @@
 	#include <mpi.h>
 #endif
 
-int rank = 0, commsize = 1;
+#include "nbody.h"
 
+
+int rank = 0, commsize = 1;
 
 #if USE_MPI
 static const char *mpi_thread_support[] = {"SINGLE", "FUNNELED", "SERIALIZED", "MULTIPLE"};
@@ -63,8 +64,8 @@ void particle_init(const nbody_conf_t *const conf, coord_t *position, float *mas
 
 void nbody_generate_particles(const nbody_conf_t *conf, nbody_file_t *file)
 {
-	char fname[1024];
-	sprintf(fname, "%s.in", file->name);
+	char fname[MAX_FILENAME_LEN];
+	snprintf(fname, sizeof(fname), "%s.in", file->name);
 
 	if (access(fname, F_OK) == 0)
 		return;
@@ -89,8 +90,8 @@ void nbody_generate_particles(const nbody_conf_t *conf, nbody_file_t *file)
 
 void nbody_check(const nbody_t *nbody)
 {
-	char fname[1024];
-	sprintf(fname, "%s.out", nbody->file.name);
+	char fname[MAX_FILENAME_LEN];
+	snprintf(fname, sizeof(fname), "%s.out", nbody->file.name);
 	if (access(fname, F_OK) != 0)
 	{
 		if (rank == 0)
@@ -146,8 +147,8 @@ void nbody_check(const nbody_t *nbody)
 
 void nbody_load_particles(coord_t *positions, float *masses, nbody_file_t *file, const int num_particles)
 {
-	char fname[1024];
-	sprintf(fname, "%s.in", file->name);
+	char fname[MAX_FILENAME_LEN];
+	snprintf(fname, sizeof(fname), "%s.in", file->name);
 
 	const int fd = open(fname, O_RDONLY, 0);
 	void *ptr = mmap(NULL, file->input_size, PROT_READ, MAP_SHARED, fd, 0);
@@ -225,13 +226,23 @@ nbody_file_t nbody_setup_file(const nbody_conf_t *const conf)
 	file.mass_offset     = conf->num_particles * sizeof(float)  * rank + file.check_size;
 
 	// 1 is there for file name compatibility
-	sprintf(file.name, "%s-%s-%d-%d-%d", conf->name, XSTR(BIGO), total_num_particles, 1, conf->timesteps);
+	snprintf(file.name, sizeof(file.name), "%s-%s-%d-%d-%d", conf->name, XSTR(BIGO), total_num_particles, 1, conf->timesteps);
 	return file;
 }
 
 nbody_t nbody_setup(const nbody_conf_t *const conf)
 {
 	nbody_file_t file = nbody_setup_file(conf);
+
+	if (conf->check)
+	{
+		char fname[MAX_FILENAME_LEN];
+		snprintf(fname, sizeof(fname), "%s.out", file.name);
+		if (conf->check == DUMP_RESULT && access(fname, F_OK) != -1)
+			errx(1, "Should dump result but file \"%s\" already exists", fname);
+		else if (conf->check == CHECK_RESULT && access(fname, R_OK) == -1)
+			err(1, "Should check result but file \"%s\" can not be read", fname);
+	}
 
 	if (rank == 0)
 		nbody_generate_particles(conf, &file);
@@ -278,8 +289,8 @@ nbody_t nbody_setup(const nbody_conf_t *const conf)
 
 void nbody_save_particles(const nbody_t *const nbody)
 {
-	char fname[1024];
-	sprintf(fname, "%s.out", nbody->file.name);
+	char fname[MAX_FILENAME_LEN];
+	snprintf(fname, sizeof(fname), "%s.out", nbody->file.name);
 
 	#if USE_MPI
 	MPI_File outfile;
@@ -291,7 +302,7 @@ void nbody_save_particles(const nbody_t *const nbody)
 	MPI_File_close(&outfile);
 	MPI_Barrier(MPI_COMM_WORLD);
 	#else
-	int fd = open(fname, O_WRONLY | O_CREAT);
+	int fd = open(fname, O_WRONLY | O_CREAT, 0666);
 	write(fd, nbody->positions, nbody->num_particles * sizeof(coord_t));
 	close(fd);
 	#endif
