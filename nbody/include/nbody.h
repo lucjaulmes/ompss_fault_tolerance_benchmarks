@@ -46,11 +46,18 @@ typedef struct
 	float domain_size_z;
 	float mass_maximum;
 	float time_interval;
-	int   seed;
+	int num_particles;
+	int timesteps;
+	int seed;
+	int check;
 	const char *name;
-	const int timesteps;
-	const int num_particles;
+#if TASKLOOP
+	int num_tasks;
+#endif
 } nbody_conf_t;
+
+#define SAVE_FILE 1
+#define CHECK_FILE 2
 
 typedef struct
 {
@@ -69,11 +76,8 @@ typedef struct
 /* common.c */
 #if USE_MPI
 void setup_mpi(int argc, char *argv[]);
-static inline int get_commsize() { extern int commsize; return commsize; }
-#else
-#define get_commsize() 1
 #endif
-extern int rank;
+extern int rank, commsize;
 
 nbody_t nbody_setup(const nbody_conf_t *const conf);
 void nbody_save_particles(const nbody_t *nbody);

@@ -63,15 +63,19 @@ void calculate_local_forces(coord_ptr_t forces, coord_ptr_t positions, float_ptr
 			fy += force * diff_y;
 			fz += force * diff_z;
 		}
+
 		// NB overwrite previous iterations' values
 		forces[i] = (coord_t) {fx, fy, fz};
 	}
 }
 
-void calculate_forces(coord_ptr_t forces, coord_ptr_t positions1, float_ptr_t masses1, coord_ptr_t positions2, float_ptr_t masses2, int n_particles)
+void calculate_forces(coord_ptr_t forces, coord_ptr_t positions1, float_ptr_t masses1,
+					  coord_ptr_t positions2, float_ptr_t masses2, int n_particles)
 {
-	//pragma omp task in([n_blocks]local_masses, [n_blocks]local_positions, [n_blocks]local_masses, [n_blocks]remote_positions) inout([n_blocks]forces) label(remote_forces)
-	OMP_LOOP(in(masses1[i; GS], positions1[i; GS], ALL_BLOCKS(masses2, n_particles, GS), ALL_BLOCKS(positions2, n_particles, GS)) out(forces[i; GS]), label(forces_loop))
+	//pragma omp task in([n_blocks]local_masses, [n_blocks]local_positions, [n_blocks]local_masses, [n_blocks]remote_positions)
+	//				inout([n_blocks]forces) label(remote_forces)
+	OMP_LOOP(in(masses1[i; GS], positions1[i; GS], ALL_BLOCKS(masses2, n_particles, GS), ALL_BLOCKS(positions2, n_particles, GS))
+			out(forces[i; GS]), label(forces_loop))
 	for (int i = 0; i < n_particles; i++)
 	{
 		float fx = 0, fy = 0, fz = 0;
@@ -102,6 +106,7 @@ void calculate_forces(coord_ptr_t forces, coord_ptr_t positions1, float_ptr_t ma
 			fy += force * diff_y;
 			fz += force * diff_z;
 		}
+
 		// NB add to current iterations' values
 		forces[i].x += fx;
 		forces[i].y += fy;
@@ -132,9 +137,11 @@ void update_part(coord_t *position, coord_t *velocity, const float_t mass, const
 }
 
 
-void update_particles(coord_ptr_t positions, coord_ptr_t velocities, coord_ptr_t forces, float_ptr_t masses, const int n_particles, const float time_interval)
+void update_particles(coord_ptr_t positions, coord_ptr_t velocities, coord_ptr_t forces, float_ptr_t masses,
+					  const int n_particles, const float time_interval)
 {
-	//pragma omp task inout([n_blocks]local_positions, [n_blocks]velocities) in([n_blocks]local_masses, [n_blocks]forces) label(update_particles)
+	//pragma omp task inout([n_blocks]local_positions, [n_blocks]velocities)
+	//					 in([n_blocks]local_masses, [n_blocks]forces) label(update_particles)
 	OMP_LOOP(inout(positions[i; GS], velocities[i; GS]) in(masses[i; GS], forces[i; GS]), label(update_loop))
 	for (int i = 0; i < n_particles; i++)
 		update_part(positions + i, velocities + i, masses[i], forces + i, time_interval);

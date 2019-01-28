@@ -13,7 +13,8 @@
 
 int GS;
 
-void solve_nbody(coord_ptr_t local_positions, coord_ptr_t velocities, coord_ptr_t forces, float_ptr_t local_masses, coord_ptr_t remote_positions, float_ptr_t remote_masses,
+void solve_nbody(coord_ptr_t local_positions, coord_ptr_t velocities, coord_ptr_t forces,
+				 float_ptr_t local_masses, coord_ptr_t remote_positions, float_ptr_t remote_masses,
                  const int n_part, const int timesteps, const float time_interval)
 {
 	#if USE_MPI

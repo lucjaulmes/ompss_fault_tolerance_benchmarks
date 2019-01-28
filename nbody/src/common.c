@@ -18,12 +18,11 @@
 	#include <mpi.h>
 #endif
 
-int rank = 0;
+int rank = 0, commsize = 1;
 
 
 #if USE_MPI
 static const char *mpi_thread_support[] = {"SINGLE", "FUNNELED", "SERIALIZED", "MULTIPLE"};
-int commsize = 0;
 
 void setup_mpi(int argc, char *argv[])
 {
@@ -76,7 +75,7 @@ void nbody_generate_particles(const nbody_conf_t *conf, nbody_file_t *file)
 	if (fd < 0 || ftruncate(fd, file->input_size) != 0 || ptr == MAP_FAILED)
 		err(1, "Error creating and mapping file %s with size %zu", fname, file->input_size);
 
-	const int total_num_particles = conf->num_particles * get_commsize();
+	const int total_num_particles = conf->num_particles * commsize;
 	coord_ptr_t positions = ptr + 0;
 	float_ptr_t masses    = ptr + file->check_size;
 
@@ -91,7 +90,7 @@ void nbody_generate_particles(const nbody_conf_t *conf, nbody_file_t *file)
 void nbody_check(const nbody_t *nbody)
 {
 	char fname[1024];
-	sprintf(fname, "%s.ref", nbody->file.name);
+	sprintf(fname, "%s.out", nbody->file.name);
 	if (access(fname, F_OK) != 0)
 	{
 		if (rank == 0)
@@ -137,7 +136,7 @@ void nbody_check(const nbody_t *nbody)
 
 	if (rank == 0)
 	{
-		if ((count * 100.0) / (get_commsize() * nbody->num_particles) > 0.6 || relative_error > 0.000008)
+		if ((count * 100.0) / (commsize * nbody->num_particles) > 0.6 || relative_error > 0.000008)
 			printf("Relative error[%d]: %f\n", count, relative_error);
 		else
 			printf("Result validation: OK\n");
@@ -218,14 +217,15 @@ void *nbody_alloc_position_mass(const nbody_conf_t *const conf)
 nbody_file_t nbody_setup_file(const nbody_conf_t *const conf)
 {
 	nbody_file_t file;
-	const int total_num_particles = conf->num_particles * get_commsize();
+	const int total_num_particles = conf->num_particles * commsize;
 	file.check_size = total_num_particles * sizeof(coord_t);
 	file.input_size = total_num_particles * sizeof(float) + file.check_size;
 
 	file.position_offset = conf->num_particles * sizeof(coord_t) * rank;
 	file.mass_offset     = conf->num_particles * sizeof(float)  * rank + file.check_size;
 
-	sprintf(file.name, "%s-%s-%d-%d-%d", conf->name, XSTR(BIGO), total_num_particles, 1, conf->timesteps); // 1 is there for file name compatibility
+	// 1 is there for file name compatibility
+	sprintf(file.name, "%s-%s-%d-%d-%d", conf->name, XSTR(BIGO), total_num_particles, 1, conf->timesteps);
 	return file;
 }
 
@@ -323,9 +323,9 @@ double wall_time()
 
 void print_stats(double n_particles, int timesteps, double elapsed_time)
 {
-	double total_particles      = get_commsize() * n_particles; // Each process has n_particles
+	double total_particles      = commsize * n_particles; // Each process has n_particles
 	double total_ints_per_sec   = total_particles * total_particles * timesteps / elapsed_time;
-	double process_ints_per_sec = total_ints_per_sec / get_commsize();
+	double process_ints_per_sec = total_ints_per_sec / commsize;
 	printf("Non-offload execution time: %g s \n", elapsed_time);
 	printf("Million interactions per second: %g (total: %g)\n", process_ints_per_sec / 1.0E6,      total_ints_per_sec / 1.0E6);
 	printf("GFLOPS (20 FLOP per inter): %g (total: %g)\n",      process_ints_per_sec * 20 / 1.0E9, total_ints_per_sec * 20 / 1.0E9);
