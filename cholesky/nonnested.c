@@ -149,20 +149,6 @@
 #endif
 
 
-#if CONVERT_ON_REQUEST
-	#define TRY_GATHER_BLOCK(x1, x2, x3, x4)      \
-    do {                                          \
-		if (x4 == NULL)                           \
-		{                                         \
-			x4 = malloc_block(x2);                \
-			gather_block(x1, x2, x3, x4);         \
-		}                                         \
-	} while (0)
-#else
-	#define TRY_GATHER_BLOCK(x1, x2, x3, x4) do {} while (0)
-#endif
-
-
 // define SD: the prefix s or d for single or double precision
 #ifdef DOUBLE_PREC
 	#define REAL				double
@@ -585,17 +571,29 @@ static void convert_to_linear(int ts, int DIM, int N, REAL *A[DIM][DIM], REAL Al
 }
 
 
-#if CONVERT_ON_REQUEST
-static REAL *malloc_block(int ts)
+static inline REAL *malloc_block(int ts)
 {
-	REAL *block = malloc(ts * ts * sizeof(REAL));
+	REAL *block = CATCHROI_INSTRUMENT(aligned_alloc)(4096, ts * ts * sizeof(REAL));
 
 	if (block == NULL)
 		err(1, "ALLOCATION ERROR (Ah block of %d elements)", ts);
 
 	return block;
 }
+
+
+static inline REAL* check_block(int CONVERT_ONREQ_ONLY N, int CONVERT_ONREQ_ONLY ts,
+								REAL CONVERT_ONREQ_ONLY *linaddr, REAL *blockaddr)
+{
+#if CONVERT_ON_REQUEST
+	if (!blockaddr)
+	{
+		blockaddr = malloc_block(ts);
+		gather_block(N, ts, linblock, blockaddr);
+	}
 #endif
+	return blockaddr;
+}
 
 //----------------------------------------------------------------------------------
 //			 TASKS FOR CHOLESKY
@@ -696,10 +694,7 @@ void TILE(syrk)(REAL *A, REAL *C, int NB)
 void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
 {
 	int i, j, k;
-
-#if CONVERT_ON_REQUEST
-	int N = nt * ts;
-#endif
+	int CONVERT_ONREQ_ONLY N = nt * ts;
 
 #if STOP_SCHED
 	NANOS_SAFE(nanos_stop_scheduler());
@@ -708,10 +703,10 @@ void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
 
 	// Shuffle across sockets
 	for (k = 0; k < nt; k++) {
-		TRY_GATHER_BLOCK(N, ts, &Alin[k * ts * N + k * ts], Ah[k * nt + k]);
+		Ah[k * nt + k] = check_block(N, ts, &Alin[(k * N + k) * ts], Ah[k * nt + k]);
 		for (i = 0; i < k; i++)
 		{
-			TRY_GATHER_BLOCK(N, ts, &Alin[i * ts * N + i * ts], Ah[i * nt + i]);
+			Ah[i * nt + i] = check_block(N, ts, &Alin[(i * N + i) * ts], Ah[i * nt + i]);
 			SYRK(Ah[i * nt + k], Ah[k * nt + k], ts);
 		}
 
@@ -723,11 +718,11 @@ void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
 		{
 			for (j = 0; j < k; j++)
 			{
-				TRY_GATHER_BLOCK(N, ts, &Alin[k * ts * N + j * ts], Ah[k * nt + j]);
-				TRY_GATHER_BLOCK(N, ts, &Alin[i * ts * N + j * ts], Ah[j * nt + i]);
+				Ah[k * nt + j] = check_block(N, ts, &Alin[(k * N + j) * ts], Ah[k * nt + j]);
+				Ah[j * nt + i] = check_block(N, ts, &Alin[(i * N + j) * ts], Ah[j * nt + i]);
 				GEMM(Ah[j * nt + i], Ah[j * nt + k], Ah[k * nt + i], ts);
 			}
-			TRY_GATHER_BLOCK(N, ts, &Alin[k * ts * N + i * ts], Ah[k * nt + i]);
+			Ah[k * nt + i] = check_block(N, ts, &Alin[(k * N + i) * ts], Ah[k * nt + i]);
 			TRSM(Ah[k * nt + k], Ah[k * nt + i], ts);
 		}
 	}
@@ -757,11 +752,11 @@ int main(int argc, char *argv[])
 
 	// Allocations
 
-	REAL *matrix = CATCHROI_INSTRUMENT(aligned_alloc)(4096, n * n * sizeof(REAL));
+	REAL *matrix = aligned_alloc(4096, n * n * sizeof(REAL));
 	if (matrix == NULL)
 		err(1, "ALLOCATION ERROR");
 
-	REAL *original_matrix = CATCHROI_INSTRUMENT(aligned_alloc)(4096, n * n * sizeof(REAL));
+	REAL *original_matrix = aligned_alloc(4096, n * n * sizeof(REAL));
 	if (original_matrix == NULL)
 		err(1, "ALLOCATION ERROR\n");
 
@@ -772,7 +767,7 @@ int main(int argc, char *argv[])
 
 	for (i = 0; i < nt * nt; i++)
 	{
-		Ah[i] = CATCHROI_INSTRUMENT(aligned_alloc)(4096, ts * ts * sizeof(REAL));
+		Ah[i] = malloc_block(ts);
 		if (Ah[i] == NULL)
 			err(1, "ALLOCATION ERROR (Ah[%d])", i);
 	}
