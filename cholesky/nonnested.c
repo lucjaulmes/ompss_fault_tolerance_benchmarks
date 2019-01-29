@@ -195,15 +195,15 @@
 #endif
 
 
-void LAPACK(laset)(const char *UPLO, const int *M, const int *N, const REAL *ALPHA, const REAL *BETA, REAL *A, const int *LDA);
-void LAPACK(gemm)(const char *transa, const char *transb, int *l, int *n, int *m, REAL *alpha, const void *a, int *lda, void *b, int *ldb, REAL *beta, void *c, int *ldc);
+void LAPACK(laset)(const char *UPLO, const int *M, const int *n, const REAL *ALPHA, const REAL *BETA, REAL *A, const int *LDA);
+void LAPACK(gemm)(const char *transa, const char *transb, const int *l, const int *n, const int *m, REAL *alpha, const void *a, const int *lda, void *b, const int *ldb, REAL *beta, void *c, const int *ldc);
 REAL LAPACK(lange)(const char *norm, const int *m, const int *n, const REAL *a, const int *lda, REAL *work);
 void LAPACK(lacpy)(const char *norm, const int *m, const int *n, const REAL *a, const int *lda, REAL *b, const int *ldb);
 void LAPACK(larnv)(const int *idist, int *iseed, const int *n, REAL *x);
 void LAPACK(potrf)(const char *uplo, const int *n, REAL *a, const int *lda, LONG *info);
-void LAPACK(trsm)(char *side, char *uplo, char *transa, char *diag, int *m, int *n, REAL *alpha, REAL *a, int *lda, REAL *b, int *ldb);
-void LAPACK(trmm)(char *side, char *uplo, char *transa, char *diag, int *m, int *n, REAL *alpha, REAL *a, int *lda, REAL *b, int *ldb);
-void LAPACK(syrk)(char *uplo, char *trans, int *n, int *k, REAL *alpha, REAL *a, int *lda, REAL *beta, REAL *c, int *ldc);
+void LAPACK(trsm)(char *side, char *uplo, char *transa, char *diag, const int *m, const int *n, REAL *alpha, REAL *a, const int *lda, REAL *b, const int *ldb);
+void LAPACK(trmm)(char *side, char *uplo, char *transa, char *diag, const int *m, const int *n, REAL *alpha, REAL *a, const int *lda, REAL *b, const int *ldb);
+void LAPACK(syrk)(char *uplo, char *trans, const int *n, const int *k, REAL *alpha, REAL *a, const int *lda, REAL *beta, REAL *c, const int *ldc);
 
 float get_time();
 static int check_factorization(int, REAL *, REAL *, char, REAL);
@@ -211,7 +211,7 @@ static int check_factorization(int, REAL *, REAL *, char, REAL);
 //void gpu_spotf2_var1_(char *, int *, unsigned int *, int *, int *);
 void gpu_spotrf_var1_(char *, int *, unsigned int *, int *, int *, int *);
 
-void cholesky(REAL *Alin, REAL **Ah, int ts, int nt);
+void cholesky(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*Ah)[nt])[ts]);
 
 
 enum blas_order_type
@@ -353,7 +353,7 @@ BLAS_dfpinfo(enum blas_cmach_type cmach)
 }
 
 
-void add_to_diag_hierarchical(REAL **matrix, int ts, int nt, float alpha)
+void add_to_diag_hierarchical(REAL **matrix, const int ts, const int nt, float alpha)
 {
 	int i;
 
@@ -362,11 +362,10 @@ void add_to_diag_hierarchical(REAL **matrix, int ts, int nt, float alpha)
 }
 
 
-void add_to_diag(REAL *matrix, int n, REAL alpha)
+void add_to_diag(const int n, REAL (*matrix)[n], REAL alpha)
 {
-	int i;
-	for (i = 0; i < n; i++)
-		matrix[i + i * n] += alpha;
+	for (int i = 0; i < n; i++)
+		matrix[i][i] += alpha;
 }
 
 
@@ -398,44 +397,44 @@ float get_time()
 /*------------------------------------------------------------------------
  *  Robust Check the factorization of the matrix A2
  */
-static int check_factorization(int N, REAL *A1, REAL *A2, char uplo, REAL eps)
+static int check_factorization(const int n, REAL *A1, REAL *A2, char uplo, REAL eps)
 {
 	int i, j;
 	char NORM = 'I', LE = 'L', TR = 'T', NU = 'N', RI = 'R';
 
-	REAL *L2       = calloc(N * N, sizeof(REAL));
-	REAL *work     = calloc(N, sizeof(REAL));
+	REAL *L2       = calloc(n * n, sizeof(REAL));
+	REAL *work     = calloc(n, sizeof(REAL));
 	REAL alpha     = 1.0;
 
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, N, N, A1, N, &Anorm);
-	REAL Anorm = LAPACK(lange)(&NORM, &N, &N, A1, &N, work);
+	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, n, n, A1, n, &Anorm);
+	REAL Anorm = LAPACK(lange)(&NORM, &n, &n, A1, &n, work);
 
 	/* Dealing with L'L or U'U  */
-	LAPACK(lacpy)(&uplo, &N, &N, A2, &N, L2, &N);
+	LAPACK(lacpy)(&uplo, &n, &n, A2, &n, L2, &n);
 
 	if (uplo == 'U')
 		/* L2 = 1 * A2^T * L2 */
-		LAPACK(trmm)(&LE, &uplo, &TR, &NU, &N, &N, &alpha, A2, &N, L2, &N);
+		LAPACK(trmm)(&LE, &uplo, &TR, &NU, &n, &n, &alpha, A2, &n, L2, &n);
 	else
 		/* L2 = 1 * L2 * A2^T */
-		LAPACK(trmm)(&RI, &uplo, &TR, &NU, &N, &N, &alpha, A2, &N, L2, &N);
+		LAPACK(trmm)(&RI, &uplo, &TR, &NU, &n, &n, &alpha, A2, &n, L2, &n);
 
 	/* Compute the residual || A - L'L || */
-	for (i = 0; i < N; i++)
-		for (j = 0; j < N; j++)
-			A1[j * N + i] -= L2[j * N + i];
+	for (i = 0; i < n; i++)
+		for (j = 0; j < n; j++)
+			A1[j * n + i] -= L2[j * n + i];
 
-	REAL Rnorm = LAPACK(lange)(&NORM, &N, &N, A1, &N, work);
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, N, N, A1, N, &Rnorm);
+	REAL Rnorm = LAPACK(lange)(&NORM, &n, &n, A1, &n, work);
+	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, n, n, A1, n, &Rnorm);
 
 	free(L2);
 	free(work);
 
 	printf("============\n");
 	printf("Checking the Cholesky Factorization \n");
-	printf("-- ||L'L-A||_inf/(||A||_inf.N.eps) = %e\n", Rnorm / (Anorm * N * eps));
+	printf("-- ||L'L-A||_inf/(||A||_inf.n.eps) = %e\n", Rnorm / (Anorm * n * eps));
 
-	int info_factorization = isnan(Rnorm / (Anorm * N * eps)) || isinf(Rnorm / (Anorm * N * eps)) || (Rnorm / (Anorm * N * eps) > 60.0);
+	int info_factorization = isnan(Rnorm / (Anorm * n * eps)) || isinf(Rnorm / (Anorm * n * eps)) || (Rnorm / (Anorm * n * eps) > 60.0);
 
 	if (info_factorization)
 		printf("-- Factorization is suspicious ! \n");
@@ -448,7 +447,7 @@ static int check_factorization(int N, REAL *A1, REAL *A2, char uplo, REAL eps)
 
 //--------------------- check results ----------------------------------------------
 
-REAL sckres(int n, REAL *A, int lda, REAL *L, int ldl)
+REAL sckres(const int n, REAL *A, int lda, REAL *L, int ldl)
 {
 	REAL zero = 0.0, minus_one = -1.0, one = 1.0, dummy = 9;
 	char NORM = '1', T = 'T', N = 'N', U = 'U';
@@ -469,29 +468,28 @@ REAL sckres(int n, REAL *A, int lda, REAL *L, int ldl)
 //			 Changes in data storage
 //----------------------------------------------------------------------------------
 
-void print_linear_matrix(int n, REAL *matrix)
+void print_linear_matrix(const int n, REAL (*matrix)[n])
 {
-	int i, j;
-	for (i = 0; i < n; i++)
+	for (int i = 0; i < n; i++)
 	{
-		for (j = 0; j < n; j++)
-			printf("%g ", matrix[i * n + j]);
+		for (int j = 0; j < n; j++)
+			printf("%g ", matrix[i][j]);
 		printf("\n");
 	}
 }
 
 
-void read_matrix(char *filename, int n, REAL *matrix, REAL *checksum)
+void read_matrix(char *filename, const int n, REAL (*matrix)[n], REAL *checksum)
 {
-	int i = 0;
 	if (filename != NULL)
 	{
 		FILE *matrix_file = fopen(filename, "r");
 		if (!matrix_file)
 			err(1, "Could not open matrix file %s", filename);
 
-		while (i < n * n && fscanf(matrix_file, SCAN_REAL, &matrix[i]) != EOF)
-			i++;
+		for (int i = 0; i < n * n; i++)
+			if (fscanf(matrix_file, SCAN_REAL, &matrix[0][i]) == EOF)
+				break;
 
 		// Finished reading matrix; read checksum
 		if (fscanf(matrix_file, SCAN_REAL, checksum) == EOF)
@@ -502,76 +500,75 @@ void read_matrix(char *filename, int n, REAL *matrix, REAL *checksum)
 		fprintf(stderr, "No matrix file, initializing matrix with random values\n");
 		int ISEED[] = {0, 0, 0, 1}, intONE = 1;
 
-		for (i = 0; i < n * n; i += n)
-			LAPACK(larnv)(&intONE, &ISEED[0], &n, &matrix[i]);
+		for (int i = 0; i < n; i++)
+			LAPACK(larnv)(&intONE, &ISEED[0], &n, matrix[i]);
 
-		int j;
-		for (i = 0; i < n; i++)
-			for (j = 0; j < n; j++)
+		for (int i = 0; i < n; i++)
+			for (int j = 0; j < n; j++)
 			{
-				matrix[j * n + i] = matrix[j * n + i] + matrix[i * n + j];
-				matrix[i * n + j] = matrix[j * n + i];
+				matrix[j][i] = matrix[j][i] + matrix[i][j];
+				matrix[i][j] = matrix[j][i];
 			}
 
-		add_to_diag(matrix, n, (REAL) n);
+		add_to_diag(n, matrix, (REAL) n);
 
 		*checksum = 0.0;
 	}
 }
 
 
-OMP_TASK(in([N*N]Alin) out([ts*ts]A) label(gather_block), AFFINITY untied)
-static void CONVERT_TASK_ONLY gather_block(int N, int ts, REAL *Alin, REAL *A)
+// NB: full-deps in (Alin[0;ts][0;ts]), now we just declare ts n-sized rows
+OMP_TASK(in([ts]Alin) out([ts]A) label(gather_block), AFFINITY untied)
+static void CONVERT_TASK_ONLY
+gather_block(const int n, const int ts, REAL (*Alin)[n], REAL (*A)[ts])
 {
-	int i, j;
-	for (i = 0; i < ts; i++)
-		for (j = 0; j < ts; j++)
-			A[i * ts + j] = Alin[i * N + j];
+	for (int i = 0; i < ts; i++)
+		for (int j = 0; j < ts; j++)
+			A[i][j] = Alin[i][j];
 }
 
 
-OMP_TASK(in([ts*ts]A) inout([N*N]Alin) label(scatter_block), AFFINITY untied)
-static void CONVERT_TASK_ONLY scatter_block(int N, int ts, REAL *A, REAL *Alin)
+// NB: full-deps in (Alin[0;ts][0;ts]) => use out() instead of inout(), now we just declare ts n-sized rows
+OMP_TASK(in([ts]A) inout([ts]Alin) label(scatter_block), AFFINITY untied)
+static void CONVERT_TASK_ONLY
+scatter_block(const int n, const int ts, REAL (*A)[ts], REAL (*Alin)[n])
 {
-	int i, j;
-	for (i = 0; i < ts; i++)
-		for (j = 0; j < ts; j++)
-			Alin[i * N + j] = A[i * ts + j];
+	for (int i = 0; i < ts; i++)
+		for (int j = 0; j < ts; j++)
+			Alin[i][j] = A[i][j];
 }
 
 
-static void convert_to_blocks(int ts, int DIM, int N, REAL Alin[N][N], REAL *A[DIM][DIM])
+static void convert_to_blocks(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*A)[nt])[ts])
 {
-	int i, j;
 #if CONVERT_TASK
-	for (i = 0; i < DIM; i++)
-		for (j = 0; j < DIM; j++)
-			gather_block(N, ts, &Alin[i * ts][j * ts], A[i][j]);
+	for (int i = 0; i < nt; i++)
+		for (int j = 0; j < nt; j++)
+			gather_block(n, ts, (REAL (*)[n]) &Alin[i * ts][j * ts], A[i][j]);
 #else
-	for (i = 0; i < N; i++)
-		for (j = 0; j < N; j++)
-			A[j / ts][i / ts][(j % ts) * ts + i % ts] = Alin[j][i];
+	for (i = 0; i < n; i++)
+		for (j = 0; j < n; j++)
+			A[j / ts][i / ts][(j % ts)][i % ts] = Alin[j][i];
 #endif
 }
 
 
-static void convert_to_linear(int ts, int DIM, int N, REAL *A[DIM][DIM], REAL Alin[N][N])
+static void convert_to_linear(const int n, const int nt, const int ts, REAL (*(*A)[nt])[ts], REAL (*Alin)[n])
 {
-	int i, j;
 #if CONVERT_TASK
-	for (i = 0; i < DIM; i++)
-		for (j = 0; j < DIM; j++)
+	for (int i = 0; i < nt; i++)
+		for (int j = 0; j < nt; j++)
 			if (A[i][j] != NULL)
-				scatter_block(N, ts, A[i][j], (REAL *) &Alin[i * ts][j * ts]);
+				scatter_block(n, ts, A[i][j], (REAL (*)[n]) &Alin[i * ts][j * ts]);
 #else
-	for (i = 0; i < N; i++)
-		for (j = 0; j < N; j++)
-			Alin[j][i] = A[j / ts][i / ts][(j % ts) * ts + i % ts];
+	for (int i = 0; i < n; i++)
+		for (int j = 0; j < n; j++)
+			Alin[j][i] = A[j / ts][i / ts][(j % ts)][i % ts];
 #endif
 }
 
 
-static inline REAL *malloc_block(int ts)
+static inline REAL *malloc_block(const int ts)
 {
 	REAL *block = CATCHROI_INSTRUMENT(aligned_alloc)(4096, ts * ts * sizeof(REAL));
 
@@ -582,17 +579,17 @@ static inline REAL *malloc_block(int ts)
 }
 
 
-static inline REAL* check_block(int CONVERT_ONREQ_ONLY N, int CONVERT_ONREQ_ONLY ts,
-								REAL CONVERT_ONREQ_ONLY *linaddr, REAL *blockaddr)
+static inline void check_block(int CONVERT_ONREQ_ONLY n, int CONVERT_ONREQ_ONLY ts,
+								REAL CONVERT_ONREQ_ONLY (*linaddr)[n],
+								REAL CONVERT_ONREQ_ONLY (**blockaddr)[ts])
 {
 #if CONVERT_ON_REQUEST
-	if (!blockaddr)
+	if (*blockaddr == NULL)
 	{
-		blockaddr = malloc_block(ts);
-		gather_block(N, ts, linblock, blockaddr);
+		*blockaddr = (REAL(*)[ts])malloc_block(ts);
+		gather_block(n, ts, linaddr, *blockaddr);
 	}
 #endif
-	return blockaddr;
 }
 
 //----------------------------------------------------------------------------------
@@ -691,10 +688,9 @@ void TILE(syrk)(REAL *A, REAL *C, int NB)
 //			 END TASKS FOR CHOLESKY
 //----------------------------------------------------------------------------------
 
-void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
+void cholesky(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*Ah)[nt])[ts])
 {
 	int i, j, k;
-	int CONVERT_ONREQ_ONLY N = nt * ts;
 
 #if STOP_SCHED
 	NANOS_SAFE(nanos_stop_scheduler());
@@ -703,27 +699,27 @@ void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
 
 	// Shuffle across sockets
 	for (k = 0; k < nt; k++) {
-		Ah[k * nt + k] = check_block(N, ts, &Alin[(k * N + k) * ts], Ah[k * nt + k]);
+		check_block(n, ts, (REAL (*)[n]) &Alin[k * ts][k * ts], &Ah[k][k]);
 		for (i = 0; i < k; i++)
 		{
-			Ah[i * nt + i] = check_block(N, ts, &Alin[(i * N + i) * ts], Ah[i * nt + i]);
-			SYRK(Ah[i * nt + k], Ah[k * nt + k], ts);
+			check_block(n, ts, (REAL (*)[n]) &Alin[i * ts][i * ts], &Ah[i][i]);
+			SYRK((REAL*)Ah[i][k], (REAL*)Ah[k][k], ts);
 		}
 
 		// Diagonal Block factorization and panel permutations
-		POTRF(Ah[k * nt + k], ts);
+		POTRF((REAL*)Ah[k][k], ts);
 
 		// update trailing matrix
 		for (i = k + 1; i < nt; i++)
 		{
 			for (j = 0; j < k; j++)
 			{
-				Ah[k * nt + j] = check_block(N, ts, &Alin[(k * N + j) * ts], Ah[k * nt + j]);
-				Ah[j * nt + i] = check_block(N, ts, &Alin[(i * N + j) * ts], Ah[j * nt + i]);
-				GEMM(Ah[j * nt + i], Ah[j * nt + k], Ah[k * nt + i], ts);
+				check_block(n, ts, (REAL (*)[n]) &Alin[k * ts][j * ts], &Ah[k][j]);
+				check_block(n, ts, (REAL (*)[n]) &Alin[i * ts][j * ts], &Ah[j][i]);
+				GEMM((REAL*)Ah[j][i], (REAL*)Ah[j][k], (REAL*)Ah[k][i], ts);
 			}
-			Ah[k * nt + i] = check_block(N, ts, &Alin[(k * N + i) * ts], Ah[k * nt + i]);
-			TRSM(Ah[k * nt + k], Ah[k * nt + i], ts);
+			check_block(n, ts, (REAL (*)[n]) &Alin[k * ts][i * ts], &Ah[k][i]);
+			TRSM((REAL*)Ah[k][k], (REAL*)Ah[k][i], ts);
 		}
 	}
 #if STOP_SCHED
@@ -740,9 +736,10 @@ int main(int argc, char *argv[])
 	if (argc != 3 && argc != 4)
 		errx(1, "Usage: %s size block_size [matrix_file]", argv[0]);
 
-	int n = atoi(argv[1]);
-	int ts = atoi(argv[2]);
-	int nt = n / ts;
+	const int n = atoi(argv[1]);
+	const int ts = atoi(argv[2]);
+	const int nt = n / ts;
+
 
 	char *filename = NULL;
 	if (argc == 4)
@@ -752,31 +749,31 @@ int main(int argc, char *argv[])
 
 	// Allocations
 
-	REAL *matrix = aligned_alloc(4096, n * n * sizeof(REAL));
+	REAL (*matrix)[n] = (REAL(*)[n]) aligned_alloc(4096, n * n * sizeof(REAL));
 	if (matrix == NULL)
 		err(1, "ALLOCATION ERROR");
 
-	REAL *original_matrix = aligned_alloc(4096, n * n * sizeof(REAL));
+	REAL (*original_matrix)[n] = aligned_alloc(4096, n * n * sizeof(REAL));
 	if (original_matrix == NULL)
 		err(1, "ALLOCATION ERROR\n");
 
-	int i;
-	REAL **Ah = malloc(nt * nt * sizeof(REAL *));
+	REAL  (*(*Ah)[nt])[ts] = (REAL (*(*)[nt])[ts])malloc(nt * nt * sizeof(REAL *));
 	if (Ah == NULL)
 		err(1, "ALLOCATION ERROR (Ah)");
 
-	for (i = 0; i < nt * nt; i++)
-	{
-		Ah[i] = malloc_block(ts);
-		if (Ah[i] == NULL)
-			err(1, "ALLOCATION ERROR (Ah[%d])", i);
-	}
+	for (int i = 0; i < nt; i++)
+		for (int j = 0; j < nt; j++)
+		{
+			Ah[i][j] = (REAL (*)[ts])malloc_block(ts);
+			if (Ah[i][j] == NULL)
+				err(1, "ALLOCATION ERROR (Ah[%d][%d])", i, j);
+		}
 
 
 	// Initialize matrix and copy
 	REAL checksum;
 	read_matrix(filename, n, matrix, &checksum);
-	memcpy(original_matrix, matrix, n * n * sizeof(*matrix));
+	memcpy(original_matrix[0], matrix[0], n * n * sizeof(matrix[0][0]));
 
 #if USE_PAPI
 	if(PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT)
@@ -796,7 +793,7 @@ int main(int argc, char *argv[])
 	//printf("converting to blocks....")
 
 #if !CONVERT_ON_REQUEST
-	convert_to_blocks(ts, nt, n, (REAL(*)[n])matrix, (REAL*(*)[nt])Ah);
+	convert_to_blocks(n, nt, ts, matrix, Ah);
 #endif
 	//    #pragma omp taskwait
 
@@ -809,7 +806,7 @@ int main(int argc, char *argv[])
 #endif
 
 	// Actual work
-	cholesky(matrix, Ah, ts, nt);
+	cholesky(n, nt, ts, matrix, Ah);
 
 #if USE_PAPI
 	#pragma omp taskwait
@@ -825,13 +822,13 @@ int main(int argc, char *argv[])
 		errx(2, "ERROR read failed for Energy!")
 #endif
 
-	//printf("Succesfull energy measurement! value = %lld\n", values[0]);
-	convert_to_linear(ts, nt, n, (REAL*(*)[nt]) Ah, (REAL(*)[n])matrix);
+	//printf("Succesful energy measurement! value = %lld\n", values[0]);
+	convert_to_linear(n, nt, ts, Ah, matrix);
 
 	//#pragma omp taskwait
 
 	REAL eps = BLAS_dfpinfo(blas_eps);
-	int info_factorization = check_factorization(n, original_matrix, matrix, 'L', eps);
+	int info_factorization = check_factorization(n, (REAL*)original_matrix, (REAL*)matrix, 'L', eps);
 
 	float gflops = (1.0 / 3.0) * n * n * n / (time * 1e9);
 
@@ -858,8 +855,10 @@ int main(int argc, char *argv[])
 
 
 	// Free blocked matrix
-	for (i = 0; i < nt * nt; i++)
-		free(Ah[i]);
+	for (int i = 0; i < nt; i++)
+		for (int j = 0; j < nt; j++)
+			free(Ah[i][j]);
+
 	free(Ah);
 	free(matrix);
 	free(original_matrix);
