@@ -19,9 +19,10 @@
 #include <catchroi.h>
 
 // Configuration options
-#define CONVERT_TASK 0
-#define CONVERT_REQUEST 0
+#define CONVERT_TASK 1
+#define CONVERT_ON_REQUEST 0
 #define USE_AFFINITY 0
+#define DOUBLE_PREC 1
 
 #define POTRF_SMP 1
 #define POTRF_NESTED 0
@@ -45,11 +46,20 @@
 #endif
 // Checking constraints
 // If converting matrix under request, mark convert functions as tasks
-#if CONVERT_REQUEST
+#if CONVERT_ON_REQUEST
 	#if !CONVERT_TASK
 		#undef CONVERT_TASK
 		#define CONVERT_TASK 1
 	#endif
+	#define CONVERT_ONREQ_ONLY
+#else
+	#define CONVERT_ONREQ_ONLY __attribute__((unused))
+#endif
+
+#if CONVERT_TASK
+	#define CONVERT_TASK_ONLY
+#else
+	#define CONVERT_TASK_ONLY __attribute__((unused))
 #endif
 
 // Include GPU kernel's library: MAGMA or CUBLAS
@@ -139,7 +149,7 @@
 #endif
 
 
-#if CONVERT_REQUEST
+#if CONVERT_ON_REQUEST
 	#define TRY_GATHER_BLOCK(x1, x2, x3, x4)      \
     do {                                          \
 		if (x4 == NULL)                           \
@@ -485,7 +495,7 @@ void print_linear_matrix(int n, REAL *matrix)
 }
 
 
-void read_matrix(char *filename, int n, int ts, REAL *matrix, REAL *checksum)
+void read_matrix(char *filename, int n, REAL *matrix, REAL *checksum)
 {
 	int i = 0;
 	if (filename != NULL)
@@ -524,28 +534,24 @@ void read_matrix(char *filename, int n, int ts, REAL *matrix, REAL *checksum)
 }
 
 
-#if CONVERT_TASK
 OMP_TASK(in([N*N]Alin) out([ts*ts]A) label(gather_block), AFFINITY untied)
-static void gather_block(int N, int ts, REAL *Alin, REAL *A)
+static void CONVERT_TASK_ONLY gather_block(int N, int ts, REAL *Alin, REAL *A)
 {
 	int i, j;
 	for (i = 0; i < ts; i++)
 		for (j = 0; j < ts; j++)
 			A[i * ts + j] = Alin[i * N + j];
 }
-#endif
 
 
-#if CONVERT_TASK
 OMP_TASK(in([ts*ts]A) inout([N*N]Alin) label(scatter_block), AFFINITY untied)
-static void scatter_block(int N, int ts, REAL *A, REAL *Alin)
+static void CONVERT_TASK_ONLY scatter_block(int N, int ts, REAL *A, REAL *Alin)
 {
 	int i, j;
 	for (i = 0; i < ts; i++)
 		for (j = 0; j < ts; j++)
 			Alin[i * N + j] = A[i * ts + j];
 }
-#endif
 
 
 static void convert_to_blocks(int ts, int DIM, int N, REAL Alin[N][N], REAL *A[DIM][DIM])
@@ -554,10 +560,7 @@ static void convert_to_blocks(int ts, int DIM, int N, REAL Alin[N][N], REAL *A[D
 #if CONVERT_TASK
 	for (i = 0; i < DIM; i++)
 		for (j = 0; j < DIM; j++)
-		{
-			//nanos_current_socket(j % NUM_NODES); // this for dgemm
 			gather_block(N, ts, &Alin[i * ts][j * ts], A[i][j]);
-		}
 #else
 	for (i = 0; i < N; i++)
 		for (j = 0; j < N; j++)
@@ -573,10 +576,7 @@ static void convert_to_linear(int ts, int DIM, int N, REAL *A[DIM][DIM], REAL Al
 	for (i = 0; i < DIM; i++)
 		for (j = 0; j < DIM; j++)
 			if (A[i][j] != NULL)
-			{
-				//nanos_current_socket(j % NUM_NODES);
 				scatter_block(N, ts, A[i][j], (REAL *) &Alin[i * ts][j * ts]);
-			}
 #else
 	for (i = 0; i < N; i++)
 		for (j = 0; j < N; j++)
@@ -585,7 +585,7 @@ static void convert_to_linear(int ts, int DIM, int N, REAL *A[DIM][DIM], REAL Al
 }
 
 
-#if CONVERT_REQUEST
+#if CONVERT_ON_REQUEST
 static REAL *malloc_block(int ts)
 {
 	REAL *block = malloc(ts * ts * sizeof(REAL));
@@ -693,11 +693,11 @@ void TILE(syrk)(REAL *A, REAL *C, int NB)
 //			 END TASKS FOR CHOLESKY
 //----------------------------------------------------------------------------------
 
-void cholesky(REAL *Alin, REAL** Ah, int ts, int nt)
+void cholesky(REAL CONVERT_ONREQ_ONLY *Alin, REAL** Ah, int ts, int nt)
 {
 	int i, j, k;
 
-#if CONVERT_REQUEST
+#if CONVERT_ON_REQUEST
 	int N = nt * ts;
 #endif
 
@@ -711,20 +711,16 @@ void cholesky(REAL *Alin, REAL** Ah, int ts, int nt)
 		TRY_GATHER_BLOCK(N, ts, &Alin[k * ts * N + k * ts], Ah[k * nt + k]);
 		for (i = 0; i < k; i++)
 		{
-			//nanos_current_socket(i % NUM_NODES);
 			TRY_GATHER_BLOCK(N, ts, &Alin[i * ts * N + i * ts], Ah[i * nt + i]);
 			SYRK(Ah[i * nt + k], Ah[k * nt + k], ts);
 		}
 
 		// Diagonal Block factorization and panel permutations
-		//nanos_current_socket(k % NUM_NODES);
-
 		POTRF(Ah[k * nt + k], ts);
 
 		// update trailing matrix
 		for (i = k + 1; i < nt; i++)
 		{
-			//nanos_current_socket(i % NUM_NODES);
 			for (j = 0; j < k; j++)
 			{
 				TRY_GATHER_BLOCK(N, ts, &Alin[k * ts * N + j * ts], Ah[k * nt + j]);
@@ -784,7 +780,7 @@ int main(int argc, char *argv[])
 
 	// Initialize matrix and copy
 	REAL checksum;
-	read_matrix(filename, n, ts, matrix, &checksum);
+	read_matrix(filename, n, matrix, &checksum);
 	memcpy(original_matrix, matrix, n * n * sizeof(*matrix));
 
 #if USE_PAPI
@@ -804,7 +800,7 @@ int main(int argc, char *argv[])
 	//long_long values[10] = {0};
 	//printf("converting to blocks....")
 
-#if !CONVERT_REQUEST
+#if !CONVERT_ON_REQUEST
 	convert_to_blocks(ts, nt, n, (REAL(*)[n])matrix, (REAL*(*)[nt])Ah);
 #endif
 	//    #pragma omp taskwait
@@ -845,15 +841,15 @@ int main(int argc, char *argv[])
 	float gflops = (1.0 / 3.0) * n * n * n / (time * 1e9);
 
 	// Print configuration
-	fprintf(stderr, "\tCONVERT_TASK" " %d\n", CONVERT_TASK);
-	fprintf(stderr, "\tCONVERT_REQUEST %d\n", CONVERT_REQUEST);
-	fprintf(stderr, "\tPOTRF_SMP"    " %d\n", POTRF_SMP);
-	fprintf(stderr, "\tPOTRF_NESTED" " %d\n", POTRF_NESTED);
-	fprintf(stderr, "\tMAGMA_BLAS"   " %d\n", MAGMA_BLAS);
-	fprintf(stderr, "\tTRSM_SMP"     " %d\n", TRSM_SMP);
-	fprintf(stderr, "\tSYRK_NESTED"  " %d\n", SYRK_NESTED);
-	fprintf(stderr, "\tGEMM_SMP"     " %d\n", GEMM_SMP);
-	fprintf(stderr, "\tGEMM_NESTED"  " %d\n", GEMM_NESTED);
+	fprintf(stderr, "\tCONVERT_TASK   " " %d\n", CONVERT_TASK);
+	fprintf(stderr, "\tCONVERT_ON_REQUEST %d\n", CONVERT_ON_REQUEST);
+	fprintf(stderr, "\tPOTRF_SMP"       " %d\n", POTRF_SMP);
+	fprintf(stderr, "\tPOTRF_NESTED"    " %d\n", POTRF_NESTED);
+	fprintf(stderr, "\tMAGMA_BLAS"      " %d\n", MAGMA_BLAS);
+	fprintf(stderr, "\tTRSM_SMP"        " %d\n", TRSM_SMP);
+	fprintf(stderr, "\tSYRK_NESTED"     " %d\n", SYRK_NESTED);
+	fprintf(stderr, "\tGEMM_SMP"        " %d\n", GEMM_SMP);
+	fprintf(stderr, "\tGEMM_NESTED"     " %d\n", GEMM_NESTED);
 
 	// Print results
 	printf("============ CHOLESKY RESULTS ============\n");
