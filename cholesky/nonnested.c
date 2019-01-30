@@ -517,9 +517,12 @@ void read_matrix(char *filename, const int n, REAL (*matrix)[n], REAL *checksum)
 }
 
 
-// NB: full-deps in (Alin[0;ts][0;ts]), now we just declare ts n-sized rows
-OMP_TASK(in([ts]Alin) out([ts]A) label(gather_block), AFFINITY untied)
-static void CONVERT_TASK_ONLY
+#if CONVERT_TASK
+// NB: with full-deps and support for changing dimensions: in(Alin_ij[0;ts][0;ts]) out([ts]Aij)
+// now we need to flatten A to conform to future uses and could reference concurrent([n * n]full_matrix)
+OMP_TASK(out([ts * ts](A[0])) label(gather_block), AFFINITY untied)
+#endif
+static void
 gather_block(const int n, const int ts, REAL (*Alin)[n], REAL (*A)[ts])
 {
 	for (int i = 0; i < ts; i++)
@@ -528,9 +531,11 @@ gather_block(const int n, const int ts, REAL (*Alin)[n], REAL (*A)[ts])
 }
 
 
-// NB: full-deps in (Alin[0;ts][0;ts]) => use out() instead of inout(), now we just declare ts n-sized rows
-OMP_TASK(in([ts]A) inout([ts]Alin) label(scatter_block), AFFINITY untied)
-static void CONVERT_TASK_ONLY
+#if CONVERT_TASK
+// NB: with full-deps and support for changing dimensions: in([ts]A) out(Alin_ij[0;ts][0;ts])
+OMP_TASK(in([ts * ts](A[0])) label(scatter_block), AFFINITY untied)
+#endif
+static void
 scatter_block(const int n, const int ts, REAL (*A)[ts], REAL (*Alin)[n])
 {
 	for (int i = 0; i < ts; i++)
@@ -539,32 +544,31 @@ scatter_block(const int n, const int ts, REAL (*A)[ts], REAL (*Alin)[n])
 }
 
 
-static void convert_to_blocks(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*A)[nt])[ts])
+static void
+#if CONVERT_ON_REQUEST
+__attribute__((unused))
+#endif
+convert_to_blocks(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*A)[nt])[ts])
 {
-#if CONVERT_TASK
 	for (int i = 0; i < nt; i++)
 		for (int j = 0; j < nt; j++)
-			gather_block(n, ts, (REAL (*)[n]) &Alin[i * ts][j * ts], A[i][j]);
-#else
-	for (i = 0; i < n; i++)
-		for (j = 0; j < n; j++)
-			A[j / ts][i / ts][(j % ts)][i % ts] = Alin[j][i];
-#endif
+		{
+			REAL (*Aij)[ts] = A[i][j];
+			REAL (*Alin_ij)[n] = (REAL (*)[n]) &Alin[i * ts][j * ts];
+			gather_block(n, ts, Alin_ij, Aij);
+		}
 }
 
 
 static void convert_to_linear(const int n, const int nt, const int ts, REAL (*(*A)[nt])[ts], REAL (*Alin)[n])
 {
-#if CONVERT_TASK
 	for (int i = 0; i < nt; i++)
 		for (int j = 0; j < nt; j++)
-			if (A[i][j] != NULL)
-				scatter_block(n, ts, A[i][j], (REAL (*)[n]) &Alin[i * ts][j * ts]);
-#else
-	for (int i = 0; i < n; i++)
-		for (int j = 0; j < n; j++)
-			Alin[j][i] = A[j / ts][i / ts][(j % ts)][i % ts];
-#endif
+		{
+			REAL (*Aij)[ts] = A[i][j];
+			REAL (*Alin_ij)[n] = (REAL (*)[n]) &Alin[i * ts][j * ts];
+			scatter_block(n, ts, Aij, Alin_ij);
+		}
 }
 
 
@@ -703,7 +707,7 @@ void cholesky(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(
 		for (i = 0; i < k; i++)
 		{
 			check_block(n, ts, (REAL (*)[n]) &Alin[i * ts][i * ts], &Ah[i][i]);
-			SYRK((REAL*)Ah[i][k], (REAL*)Ah[k][k], ts);
+			SYRK(Ah[i][k][0], Ah[k][k][0], ts);
 		}
 
 		// Diagonal Block factorization and panel permutations
@@ -789,13 +793,10 @@ int main(int argc, char *argv[])
 		errx(2, "ERROR adding event for Energy!")
 #endif
 
-	//long_long values[10] = {0};
-	//printf("converting to blocks....")
-
 #if !CONVERT_ON_REQUEST
 	convert_to_blocks(n, nt, ts, matrix, Ah);
+	#pragma omp taskwait
 #endif
-	//    #pragma omp taskwait
 
 	float t1 = get_time();
 	start_roi();
@@ -825,7 +826,9 @@ int main(int argc, char *argv[])
 	//printf("Succesful energy measurement! value = %lld\n", values[0]);
 	convert_to_linear(n, nt, ts, Ah, matrix);
 
-	//#pragma omp taskwait
+#if CONVERT_TASK
+	#pragma omp taskwait
+#endif
 
 	REAL eps = BLAS_dfpinfo(blas_eps);
 	int info_factorization = check_factorization(n, (REAL*)original_matrix, (REAL*)matrix, 'L', eps);
