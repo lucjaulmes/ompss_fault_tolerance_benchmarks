@@ -118,7 +118,7 @@ bin:
 clean:
 	@rm -fv $(ALL_TARGETS)
 	@rm -rf .build_perf .build_instr .build_debug *.o
-	@rmdir --ignore-fail-on-non-empty bin
+	@test ! -e bin || rmdir --ignore-fail-on-non-empty bin
 
 install: $(ALL_TARGETS)
 	@mkdir -p $(DESTDIR)/bin
@@ -126,7 +126,7 @@ install: $(ALL_TARGETS)
 
 uninstall:
 	@rm -v $(addprefix $(DESTDIR)/bin/,$(notdir $(ALL_TARGETS)))
-	@rmdir --ignore-fail-on-non-empty $(DESTDIR)/bin
+	@test ! -e $(DESTDIR)/bin || rmdir --ignore-fail-on-non-empty $(DESTDIR)/bin
 
 .PRECIOUS: .build_perf .build_instr .build_debug bin
 .INTERMEDIATE: $(addsuffix _seq.o, $(basename $(SEQ_SRC)))
