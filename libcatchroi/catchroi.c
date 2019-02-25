@@ -32,7 +32,6 @@ void __parsec_roi_begin () __attribute__ ((noinline, alias ("start_roi")));
 void __parsec_roi_end () __attribute__ ((noinline, alias ("stop_roi")));
 
 
-#ifndef DISABLE_MEMORY_INSTRUMENTATION
 #ifdef CATCHROI_OVERRIDE_NAMES
 
 /* Undef the names of common memory functions, so we can access the normal names (only in this file) */
@@ -125,5 +124,3 @@ int   CATCHROI_INSTRUMENT(munmap)(void *ptr, size_t free_size)
 {
 	return munmap(ptr, free_size);
 }
-
-#endif // DISABLE_MEMORY_INSTRUMENTATION

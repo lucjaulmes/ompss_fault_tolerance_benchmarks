@@ -9,14 +9,11 @@ void start_roi();
 void stop_roi(int it);
 
 
-#ifndef DISABLE_MEMORY_INSTRUMENTATION
-
-
 #define PASTE_PREFIX(a, b) a ## b
 #define CATCHROI_INSTRUMENT(f) PASTE_PREFIX(_libcatchroi_, f)
 
-/* Define a set of functions that replace memory management functions, and take an extra argument:
- * a flag to identify whether the call comes from the library or the instrumented code. */
+/* Define a set of functions that replace memory management functions,
+ * for manual interception of allocs and some printf() showing */
 #include <stdlib.h>
 void* CATCHROI_INSTRUMENT(malloc)(size_t);
 void* CATCHROI_INSTRUMENT(calloc)(size_t, size_t);
@@ -32,7 +29,8 @@ int   CATCHROI_INSTRUMENT(munmap)(void*, size_t);
 
 
 #ifdef CATCHROI_OVERRIDE_NAMES
-/* Redefine common names of memory functions, so that all functions after the include are intercepted automatically */
+/* Redefine common names of memory functions, so that all functions after the include are intercepted automatically.
+ * NB. this is compile-time, not using preloading, meaning this won't catch allocations in libraries. */
 
 #define malloc(...)           CATCHROI_INSTRUMENT(malloc)(__VA_ARGS__)
 #define calloc(...)           CATCHROI_INSTRUMENT(calloc)(__VA_ARGS__)
@@ -46,13 +44,6 @@ int   CATCHROI_INSTRUMENT(munmap)(void*, size_t);
 #define munmap(...)           CATCHROI_INSTRUMENT(munmap)(__VA_ARGS__)
 
 #endif // CATCHROI_OVERRIDE_NAMES
-
-
-
-#else  // DISABLE_MEMORY_INSTRUMENTATION
-#define CATCHROI_INSTRUMENT(f) f
-#endif
-
 
 
 #ifdef __cplusplus
