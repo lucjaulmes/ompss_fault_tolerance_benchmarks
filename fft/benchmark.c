@@ -113,28 +113,15 @@ double complex * get_random_matrix(uint64_t n, double seed)
 }
 
 
-void print_matrix_py(int fd, int ndims, uint64_t dims[ndims], double complex *M)
+void write_numpy_matrix(char *filename, ssize_t mat_elems, double complex *M)
 {
-	dprintf(fd, "[");
-	if (ndims == 1)
-	{
-		// NB python tolerates trailing commas just fine
-		for (uint64_t j = 0; j < dims[0]; j++)
-			dprintf(fd, "%.*g%+.*gj,", __DBL_DECIMAL_DIG__, creal(M[j]), __DBL_DECIMAL_DIG__, cimag(M[j]));
-	}
-	else if (ndims > 1)
-	{
-		uint64_t dimsize = 1;
-		for (int i = 1; i < ndims; i++)
-			dimsize *= dims[i];
+	ssize_t mat_size = mat_elems * sizeof(*M);
+	int tmp = mkstemp(filename);
 
-		for (uint64_t i = 0; i < dims[0]; i++)
-		{
-			print_matrix_py(fd, ndims - 1, dims + 1, M + i * dimsize);
-			dprintf(fd, ",");
-		}
-	}
-	dprintf(fd, "]");
+	if (tmp < 0 || write(tmp, M, mat_size) != mat_size)
+		err(1, "Error writing array for numpy");
+
+	close(tmp);
 }
 
 
@@ -155,6 +142,7 @@ int main(int argc, char *argv[])
 	int numpy_check = 0, ref_check = 0, ndims = 0, opt;
 	double seed = 564321;
 	char *fpath = NULL, check = 0;
+	char numpy_mat_before[] = "fft_numpy.XXXXXX", numpy_mat_after[] = "fft_numpy.XXXXXX";
 
 	while ((opt = getopt(argc, argv, "rps:d:c:")) != -1)
 	{
@@ -193,10 +181,14 @@ int main(int argc, char *argv[])
 	if (numpy_check)
 	{
 		fd = open_numpype();
-		dprintf(fd, "import numpy as np\n");
-		dprintf(fd, "a = np.array(");
-		print_matrix_py(fd, ndims, dims, space);
+
+		dprintf(fd, "import numpy as np\ndims = (%lu", dims[0]);
+		for (int d = 1; d < ndims; d++)
+			dprintf(fd, ", %lu", dims[d]);
 		dprintf(fd, ")\n");
+
+		write_numpy_matrix(numpy_mat_before, total, space);
+		dprintf(fd, "a = np.memmap('%s', dtype=np.complex128, mode='r+', shape=dims, order = 'C')\n", numpy_mat_before);
 	}
 
 	if (ref_check)
@@ -224,13 +216,15 @@ int main(int argc, char *argv[])
 
 	if (numpy_check)
 	{
-		dprintf(fd, "b = np.array(");
-		print_matrix_py(fd, ndims, dims, space);
-		dprintf(fd, ")\n");
+		write_numpy_matrix(numpy_mat_after, total, space);
+		dprintf(fd, "b = np.memmap('%s', dtype=np.complex128, mode='r+', shape=dims, order = 'C')\n", numpy_mat_after);
 		dprintf(fd, "print(\"max error is\", np.absolute(np.fft.fftn(a) - b).max())\n");
 
 		close(fd);
 		wait(NULL);
+
+		unlink(numpy_mat_before);
+		unlink(numpy_mat_after);
 	}
 
 	if (check == 2)
