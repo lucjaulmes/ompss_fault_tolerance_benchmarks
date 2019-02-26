@@ -8,7 +8,19 @@
 #include <err.h>
 #include <errno.h>
 #include <sys/time.h>
-#include <execinfo.h>
+
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/syscall.h>
+
+#include <linux/perf_event.h>
+#include <linux/hw_breakpoint.h>
+
+#ifdef __x86_64__
+#include "xed/xed-interface.h"
+#endif
 
 #include "inject_err.h"
 
@@ -19,15 +31,22 @@ typedef struct _seu
 	volatile int64_t *pos;
 	int64_t mask;
 	double time;
-	int n_bits;
+	int n_bits, perf_fd;
 	short flip, undo;
 	_Atomic int inj;
 	float min_protect;
+	struct perf_event_mmap_page *event_map;
 } seu_t;
 
 
+typedef struct _sample {
+	struct perf_event_header header;
+	intptr_t ip, data_src;
+} sample_t;
+
+
 static int inject_n_bits = 0, inject_region = -1, inject_undo = 0, inject_flip = 1;
-static int64_t inject_put = 0, inject_page = -1;
+static int64_t inject_page = -1;
 static double inject_mtbf = 0.;
 
 static seu_t *seu = NULL;
@@ -67,7 +86,7 @@ void inject_parse_env()
 		{"page",    required_argument, NULL, 'a'},
 		{"mtbf",    required_argument, NULL, 'm'},
 		{"seed",    required_argument, NULL, 's'},
-		{"put",     required_argument, NULL, 'p'},
+		{"due",     no_argument,	   NULL, 'd'},
 		{"undo",    no_argument,       NULL, 'u'},
 	};
 
@@ -157,9 +176,8 @@ void inject_parse_env()
 			case 'u':
 				inject_undo   = 1;
 				break;
-			case 'p':
+			case 'd':
 				inject_flip   = 0;
-				inject_put    = strtoll(optarg, NULL, 0);
 			}
 		}
 	}
@@ -257,15 +275,11 @@ void* inject_err(void* ignore __attribute__((unused)))
 	// default cancellability state + nanosleep is a cancellation point
 	sleep_ns(seu->time);
 
-	int64_t *ptr = (int64_t*)seu->pos;
 	if (seu->flip)
-		*ptr ^= seu->mask;
+		*((int64_t*)seu->pos) ^= seu->mask;
 	else
-	{
-		int64_t get = *ptr;
-		*ptr = seu->mask;
-		seu->mask = get;
-	}
+		ioctl(seu->perf_fd, PERF_EVENT_IOC_REFRESH, 1);
+
 	seu->inj++;
 
 	return NULL;
@@ -276,6 +290,23 @@ void inject_start()
 {
 	if (seu == NULL)
 		return;
+
+	if (!seu->flip)
+	{
+		struct perf_event_attr pe = {
+			.type = PERF_TYPE_BREAKPOINT, .bp_type = HW_BREAKPOINT_RW, .bp_len = HW_BREAKPOINT_LEN_8, .bp_addr = (long long)seu->pos,
+			.size = sizeof (struct perf_event_attr), .config = 0, .pinned = 1, .exclude_kernel = 1, .exclude_hv = 1,
+			.sample_period = 1, .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_DATA_SRC, .wakeup_events = 1
+		};
+
+		seu->perf_fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+		if (seu->perf_fd < 0 || MAP_FAILED == (
+				 seu->event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, seu->perf_fd, 0)
+		))
+			err(1, "failed opening watchpoint");
+
+		ioctl(seu->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+	}
 
 	void *d = &seu->mask;
 	printf("inject_flip:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%.09fs\n",
@@ -293,7 +324,8 @@ void inject_stop()
 		return;
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
-	printf("inject_done:%d\n", seu->inj);
+	char buf[1024];
+	snprintf(buf, sizeof(buf), "inject_done:%d", seu->inj);
 
 	pthread_join(injector_thread, NULL);
 
@@ -301,12 +333,46 @@ void inject_stop()
 	{
 		if (seu->flip)
 			*seu->pos ^= seu->mask;
-		else
+		else if (seu->event_map->data_tail < seu->event_map->data_head)
 		{
-			int64_t tmp = *seu->pos;
-			*seu->pos = seu->mask;
-			seu->mask = tmp;
+			sample_t *sample = (sample_t*)((intptr_t)seu->event_map + seu->event_map->data_offset + seu->event_map->data_tail);
+			int mem_op = (sample->data_src >> PERF_MEM_OP_SHIFT) & (PERF_MEM_OP_LOAD | PERF_MEM_OP_STORE);
+
+#ifdef __x86_64__
+			// Use XED to decode instructions, in particular find out if it was reading or writing
+			xed_tables_init();
+
+			xed_decoded_inst_t xedd = {0};
+			xed_decoded_inst_zero(&xedd);
+			xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
+
+			if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
+				printf("xed_decode failed\n");
+
+			size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd), len = strnlen(buf, sizeof(buf));
+			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%llu perf_raw_mem_op:%d sample_memops:%lu",
+					seu->event_map->data_head - seu->event_map->data_tail, mem_op, memops);
+
+			for (unsigned m = 0; m < memops; m++)
+			{
+				len = strnlen(buf, sizeof(buf));
+				snprintf(buf + len, sizeof(buf) - len, " memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
+					m, xed_decoded_inst_mem_read(&xedd, 0), m, xed_decoded_inst_mem_written(&xedd, 0),
+					m, xed_decoded_inst_mem_written_only(&xedd, 0));
+			}
+#else
+#  error "Architecture not implemented for decoding instructions"
+#endif
 		}
+		else
+			strncat(buf, " inject_samples:0", sizeof(buf) - strnlen(buf, sizeof(buf)));
+	}
+	printf("%s\n", buf);
+
+	if (!seu->flip)
+	{
+		munmap(seu->event_map, seu->event_map->data_offset + seu->event_map->data_size);
+		close(seu->perf_fd);
 	}
 
 	free(seu);
@@ -340,7 +406,7 @@ void register_target_region(int id, void *target_ptr, size_t target_size)
 	seu->inj = 0;
 	seu->pos = ((int64_t*)target_ptr) + flip_word;
 	seu->time = inject_mtbf * (double)rand() / RAND_MAX;
-	seu->mask = inject_flip ? pick_bits(inject_n_bits) : inject_put;
+	seu->mask = pick_bits(inject_n_bits);
 	seu->flip = inject_flip;
 	seu->undo = inject_undo;
 	seu->n_bits = inject_n_bits;

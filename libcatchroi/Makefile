@@ -6,11 +6,13 @@ LIBS:=libcatchroi.a libcatchroi.so
 HEADERS:=catchroi.h
 
 make:$(LIBS)
-%.so:LDFLAGS+=-shared -pthread
+%.so:LDFLAGS+=-shared
+%.so:LDLIBS+=-pthread -lm
 
 CATCHROI_HOME?=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 DESTDIR?=$(CATCHROI_HOME)
 
+INJECT=1
 ifeq ($(INJECT),1)
 INJECT_OBJ=inject_err.o
 else
@@ -22,7 +24,7 @@ lib%.a:%.o $(INJECT_OBJ)
 	$(AR) $(ARFLAGS) $@ $^
 
 lib%.so:%.o $(INJECT_OBJ)
-	$(LINK.o) $^ -o $@
+	$(LINK.o) $^ $(LDLIBS) -o $@
 
 clean:
 	@rm -vf $(LIBS)
@@ -37,3 +39,12 @@ uninstall:
 	@rmdir --ignore-fail-on-non-empty $(DESTDIR)/lib $(DESTDIR)/include
 
 .PHONY: make clean install uninstall
+
+
+ifeq ($(shell uname -p),x86_64)
+XED_PATH?=$(HOME)/.local
+
+CPPFLAGS+=-I$(XED_PATH)/include
+LDFLAGS+=-L$(XED_PATH)/lib
+LDLIBS+=-lxed
+endif
