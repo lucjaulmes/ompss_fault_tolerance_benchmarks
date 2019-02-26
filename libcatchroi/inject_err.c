@@ -13,9 +13,6 @@
 #include "inject_err.h"
 
 
-#ifndef MEASURE_CACHE_PRESENCE
-#define MEASURE_CACHE_PRESENCE 0
-#endif // MEASURE_CACHE_PRESENCE
 
 typedef struct _seu
 {
@@ -26,9 +23,6 @@ typedef struct _seu
 	short flip, undo;
 	_Atomic int inj;
 	float min_protect;
-#if MEASURE_CACHE_PRESENCE
-	uint64_t miss_time, hit_time, test_time;
-#endif // MEASURE_CACHE_PRESENCE
 } seu_t;
 
 
@@ -263,38 +257,6 @@ void* inject_err(void* ignore __attribute__((unused)))
 	// default cancellability state + nanosleep is a cancellation point
 	sleep_ns(seu->time);
 
-#if MEASURE_CACHE_PRESENCE
-	volatile int64_t get, *ptr = seu->pos;
-	uint64_t time[5];
-
-	// get access time
-    time[0] = rdtsc();
-	get = *ptr;
-    time[1] = rdtsc();
-
-	// flush out of the cache
-    clflush((volatile void*)ptr);
-
-	// successively get miss and hit time
-    time[2] = rdtsc();
-	get = *ptr;
-    time[3] = rdtsc();
-	get = *ptr;
-    time[4] = rdtsc();
-
-	if (seu->flip)
-		*ptr ^= seu->mask;
-	else
-	{
-		*ptr = seu->mask;
-		seu->mask = (int64_t)get;
-	}
-	seu->inj++;
-
-	seu->test_time = time[1] - time[0];
-	seu->miss_time = time[3] - time[2];
-	seu->hit_time  = time[4] - time[3];
-#else  // MEASURE_CACHE_PRESENCE
 	int64_t *ptr = (int64_t*)seu->pos;
 	if (seu->flip)
 		*ptr ^= seu->mask;
@@ -305,7 +267,6 @@ void* inject_err(void* ignore __attribute__((unused)))
 		seu->mask = get;
 	}
 	seu->inj++;
-#endif // MEASURE_CACHE_PRESENCE
 
 	return NULL;
 }
@@ -332,11 +293,7 @@ void inject_stop()
 		return;
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
-#if MEASURE_CACHE_PRESENCE
-	printf("inject_done:%d time_hit:%ld time_miss:%ld time_test:%ld\n", seu->inj, seu->hit_time, seu->miss_time, seu->test_time);
-#else
 	printf("inject_done:%d\n", seu->inj);
-#endif // MEASURE_CACHE_PRESENCE
 
 	pthread_join(injector_thread, NULL);
 
