@@ -63,53 +63,35 @@ HISTORY: - Written by Rob Van der Wijngaart, November 2006.
 #include <catchroi.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <stdio.h>
 #include <math.h>
 #include <err.h>
 
 
-#define RESTRICT_KEYWORD 1
 #define DOUBLE 1
 #define STAR 1
 #define RADIUS 2
 
-#ifndef MIN
-	#define MIN(x,y) ((x)<(y)?(x):(y))
-#endif
-#ifndef MAX
-	#define MAX(x,y) ((x)>(y)?(x):(y))
-#endif
-
 #if DOUBLE
 	#define DTYPE   double
 	#define EPSILON 1.e-8
-	#define COEFX   1.0
 	#define COEFY   1.0
+	#define COEFX   1.0
 	#define FSTR    "%lf"
 	#define ABS		fabs
 #else
 	#define DTYPE   float
 	#define EPSILON 0.0001f
-	#define COEFX   1.0f
 	#define COEFY   1.0f
+	#define COEFX   1.0f
 	#define FSTR    "%f"
 	#define ABS		fabsf
 #endif
 
-/* define shorthand for indexing a multi-dimensional array                       */
-#define IN(i,j)       in [((i) / tile_size) + ((j) / tile_size) * n_tiles][((i) % tile_size) + ((j) % tile_size) * tile_size]
-#define OUT(i,j)      out[((i) / tile_size) + ((j) / tile_size) * n_tiles][((i) % tile_size) + ((j) % tile_size) * tile_size]
-#define WEIGHT(ii,jj) weight[ii+RADIUS][jj+RADIUS]
 
 #define DO_PRAGMA(x) _Pragma (#x)
 #define OMP_TASK(dependencies) DO_PRAGMA(omp task dependencies)
-
-
-#if RESTRICT_KEYWORD
-	#define RESTRICT restrict
-#else
-	#define RESTRICT
-#endif
 
 
 #include <sys/time.h>
@@ -125,9 +107,6 @@ double wtime()
 
 int main(int argc, char **argv)
 {
-	int    i, j, ii, jj, bi, bj, iter;
-	double stencil_time;
-
 	printf("Parallel Research Kernels version %s\n", "2.17 + OmpSs");
 	printf("OmpSs stencil execution on 2D grid\n");
 
@@ -157,64 +136,62 @@ int main(int argc, char **argv)
 		errx(EXIT_FAILURE, "ERROR: Stencil radius %d exceeds grid size %ld", RADIUS, n);
 
 
-	DTYPE **RESTRICT in  = aligned_alloc(sysconf(_SC_PAGESIZE), n_tiles * n_tiles * sizeof(DTYPE));	/* input grid values                    */
-	DTYPE **RESTRICT out = aligned_alloc(sysconf(_SC_PAGESIZE), n_tiles * n_tiles * sizeof(DTYPE));	/* output grid values                   */
-	for (ii = 1; ii < n_tiles - 1; ii++)
-		for (jj = 1; jj < n_tiles - 1; jj++)
+	DTYPE *(*in )[n_tiles] = calloc(n_tiles * n_tiles, sizeof(DTYPE*));
+	DTYPE *(*out)[n_tiles] = calloc(n_tiles * n_tiles, sizeof(DTYPE*));
+	for (int bi = 1; bi < n_tiles - 1; bi++)
+		for (int bj = 1; bj < n_tiles - 1; bj++)
 		{
-			in[ii * n_tiles + jj]  = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
-			out[ii * n_tiles + jj] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
+			in[bi][bj]  = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
+			out[bi][bj] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
 		}
 
-	for (ii = 1; ii < n_tiles - 1; ii++)
+	for (int b = 1; b < n_tiles - 1; b++)
 	{
-		in[ii * n_tiles + 0]             = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * (RADIUS + 1) * sizeof(DTYPE));
-		in[ii * n_tiles + n_tiles - 1]   = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * (RADIUS + 1) * sizeof(DTYPE));
-		in[ii]                           = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * (RADIUS + 1) * sizeof(DTYPE));
-		in[ii + (n_tiles - 1) * n_tiles] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * (RADIUS + 1) * sizeof(DTYPE));
+		in[b][0]           = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * RADIUS * sizeof(DTYPE));
+		in[b][n_tiles - 1] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * RADIUS * sizeof(DTYPE));
+		in[0][b]           = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * RADIUS * sizeof(DTYPE));
+		in[n_tiles - 1][b] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * RADIUS * sizeof(DTYPE));
 	}
 
 	#if STAR
-	in[0]                       = NULL;
-	in[n_tiles - 1]             = NULL;
-	in[n_tiles * (n_tiles - 1)] = NULL;
-	in[n_tiles *  n_tiles - 1]  = NULL;
+	in[0][0]                     = NULL;
+	in[0][n_tiles - 1]           = NULL;
+	in[n_tiles - 1][0]           = NULL;
+	in[n_tiles - 1][n_tiles - 1] = NULL;
 	#else
-	in[0]                       = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), (RADIUS + 1) * (RADIUS + 1) * sizeof(DTYPE));
-	in[n_tiles - 1]             = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), (RADIUS + 1) * (RADIUS + 1) * sizeof(DTYPE));
-	in[n_tiles * (n_tiles - 1)] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), (RADIUS + 1) * (RADIUS + 1) * sizeof(DTYPE));
-	in[n_tiles *  n_tiles - 1]  = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), (RADIUS + 1) * (RADIUS + 1) * sizeof(DTYPE));
+	in[0][0]                     = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
+	in[0][n_tiles - 1]           = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
+	in[n_tiles - 1][0]           = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
+	in[n_tiles - 1][n_tiles - 1] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), tile_size * tile_size * sizeof(DTYPE));
 	#endif
-	DTYPE weight[2 * RADIUS + 1][2 * RADIUS + 1];										/* weights of points in the stencil     */
 
 	if (!in || !out)
 		err(EXIT_FAILURE, "ERROR: could not allocate space for input or output array: %ld", total_length * sizeof(DTYPE));
 
-	/* fill the stencil weights to reflect a discrete divergence operator         */
-	for (jj = -RADIUS; jj <= RADIUS; jj++)
-		for (ii = -RADIUS; ii <= RADIUS; ii++)
-			WEIGHT(ii, jj) = (DTYPE) 0.0;
+	DTYPE weight_arr[2 * RADIUS + 1][2 * RADIUS + 1] = {{0.}};
+	// get a pointer to the middle element so we can access with values from -RADIUS to +RADIUS
+	DTYPE (*weight)[2 * RADIUS + 1] = (DTYPE (*)[2 * RADIUS + 1])(weight_arr[RADIUS] + RADIUS);
 
 	#if STAR
 	int stencil_size = 4 * RADIUS + 1;
-	for (ii = 1; ii <= RADIUS; ii++)
+	for (int jj = 1; jj <= RADIUS; jj++)
 	{
-		WEIGHT(0, ii) = WEIGHT(ii, 0) = (DTYPE)(1.0 / (2.0 * ii * RADIUS));
-		WEIGHT(0, -ii) = WEIGHT(-ii, 0) = -(DTYPE)(1.0 / (2.0 * ii * RADIUS));
+		weight[0][ jj] = weight[ jj][0] =  1. / (2 * jj * RADIUS);
+		weight[0][-jj] = weight[-jj][0] = -1. / (2 * jj * RADIUS);
 	}
 	#else
 	int stencil_size = (2 * RADIUS + 1) * (2 * RADIUS + 1);
-	for (jj = 1; jj <= RADIUS; jj++)
+	for (int ii = 1; ii <= RADIUS; ii++)
 	{
-		for (ii = -jj + 1; ii < jj; ii++)
+		for (int jj = -ii + 1; jj < ii; jj++)
 		{
-			WEIGHT(ii, jj)  = (DTYPE)(1.0 / (4.0 * jj * (2.0 * jj - 1) * RADIUS));
-			WEIGHT(ii, -jj) = -(DTYPE)(1.0 / (4.0 * jj * (2.0 * jj - 1) * RADIUS));
-			WEIGHT(jj, ii)  = (DTYPE)(1.0 / (4.0 * jj * (2.0 * jj - 1) * RADIUS));
-			WEIGHT(-jj, ii) = -(DTYPE)(1.0 / (4.0 * jj * (2.0 * jj - 1) * RADIUS));
+			weight[ jj][ ii] =  1. / (4 * ii * (2 * ii - 1) * RADIUS);
+			weight[ jj][-ii] = -1. / (4 * ii * (2 * ii - 1) * RADIUS);
+			weight[ ii][ jj] =  1. / (4 * ii * (2 * ii - 1) * RADIUS);
+			weight[-ii][ jj] = -1. / (4 * ii * (2 * ii - 1) * RADIUS);
 		}
-		WEIGHT(jj, jj)    = (DTYPE)(1.0 / (4.0 * jj * RADIUS));
-		WEIGHT(-jj, -jj)  = -(DTYPE)(1.0 / (4.0 * jj * RADIUS));
+		weight[ ii][ ii] =  1. / (4 * ii * RADIUS);
+		weight[-ii][-ii] = -1. / (4 * ii * RADIUS);
 	}
 	#endif
 
@@ -231,180 +208,175 @@ int main(int argc, char **argv)
 	#else
 	printf("Data type            = single precision\n");
 	#endif
-	#if RESTRICT_KEYWORD
-	printf("No aliasing          = on\n");
-	#else
-	printf("No aliasing          = off\n");
-	#endif
 	printf("Compact representation of stencil loop body\n");
 	printf("Parallel regions     = tasked (ompss tasks)\n");
 
 
 	/* intialize the input and output arrays                                     */
-	for (j = 0; j < n_tiles; j++)
-		for (i = 0; i < n_tiles; i++)
+	for (int bi = 0; bi < n_tiles; bi++)
+		for (int bj = 0; bj < n_tiles; bj++)
 		{
-			const int bi_size = (i == 0 || i == (n_tiles - 1)) ? RADIUS + 1 : tile_size;
-			const int bj_size = (j == 0 || j == (n_tiles - 1)) ? RADIUS + 1 : tile_size;
-			const int ii_shift = (i == 0) ? tile_size - RADIUS - 1 : 0;
-			const int jj_shift = (j == 0) ? tile_size - RADIUS - 1 : 0;
-			DTYPE *in_b = in[i + j * n_tiles], add = (COEFX * i + COEFY * j) * tile_size;
+			const int tile_height = (bi == 0 || bi == n_tiles - 1) ? RADIUS : tile_size;
+			const int tile_width  = (bj == 0 || bj == n_tiles - 1) ? RADIUS : tile_size;
 
-			if (in_b == NULL) continue;
+			DTYPE (*block)[tile_width] = (DTYPE (*)[tile_width])in[bi][bj];
+			if (!block) continue;
 
-			#pragma omp task out([bj_size]in_b) private(ii, jj) firstprivate(i, j, add)
-			for (jj = 0; jj < bj_size; jj++)
-				for (ii = 0; ii < bi_size; ii++)
-					in_b[jj * bi_size + ii] = add + COEFX * (ii + ii_shift) + COEFY * (jj + jj_shift);
+			DTYPE add = (COEFX * bi + COEFY * bj) * tile_size;
+			if (bi == 0) add += (tile_size - tile_height) * COEFX;
+			if (bj == 0) add += (tile_size - tile_width ) * COEFY;
+
+			#pragma omp task out([tile_size * tile_size]block) firstprivate(add)
+			for (int ii = 0; ii < tile_height; ii++)
+				for (int jj = 0; jj < tile_width; jj++)
+					block[ii][jj] = add + COEFX * ii + COEFY * jj;
 		}
 
-	for (j = 1; j < n_tiles - 1; j++)
-		for (i = 1; i < n_tiles - 1; i++)
+	for (int bi = 1; bi < n_tiles - 1; bi++)
+		for (int bj = 1; bj < n_tiles - 1; bj++)
 		{
-			DTYPE *out_b = out[i + j * n_tiles];
-			#pragma omp task out([tile_size * tile_size]out_b) private(ii, jj) firstprivate(i, j)
-			for (jj = (j == 0 ? RADIUS : 0); jj < (j + 1 < n_tiles ? tile_size : tile_size - RADIUS); jj++)
-				for (ii = (i == 0 ? RADIUS : 0); ii < (i + 1 < n_tiles ? tile_size : tile_size - RADIUS); ii++)
-					out_b[ii + jj * tile_size] = 0.0;
+			#pragma omp task out([tile_size * tile_size](out[bj][bi])) firstprivate(bj, bi)
+			memset(out[bj][bi], 0, tile_size * tile_size * sizeof(DTYPE));
 		}
 
 	#pragma omp taskwait
 
-	stencil_time = wtime();
+	double stencil_time = wtime();
+	int iter;
 	start_roi();
 
 	for (iter = 0; iter <= iterations; iter++)
 	{
-		for (bj = 1; bj < n_tiles - 1; bj ++)
-			for (bi = 1; bi < n_tiles - 1; bi ++)
+		for (int bi = 1; bi < n_tiles - 1; bi ++)
+			for (int bj = 1; bj < n_tiles - 1; bj ++)
 			{
-				const int up_h  = (bj == 1)           ? (RADIUS + 1) : tile_size,
-						down_h  = (bj == n_tiles - 2) ? (RADIUS + 1) : tile_size,
-						left_w  = (bi == 1)           ? (RADIUS + 1) : tile_size,
-						right_w = (bi == n_tiles - 2) ? (RADIUS + 1) : tile_size;
+				const int height_up   = bi == 1           ? RADIUS : tile_size;
+				const int height_down = bi == n_tiles - 2 ? RADIUS : tile_size;
+				const int width_left  = bj == 1           ? RADIUS : tile_size;
+				const int width_right = bj == n_tiles - 2 ? RADIUS : tile_size;
 
 				/* from..to for all blocks that are neighbours */
-				DTYPE (*o)[tile_size]       = (DTYPE (*)[tile_size])out[bi + n_tiles * bj];
-				DTYPE (*in_b)[tile_size]    = (DTYPE (*)[tile_size])in[bi + n_tiles * bj];
-				DTYPE (*in_up)[tile_size]   = (DTYPE (*)[tile_size])in[bi + n_tiles * (bj - 1)];
-				DTYPE (*in_down)[tile_size] = (DTYPE (*)[tile_size])in[bi + n_tiles * (bj + 1)];
-				DTYPE (*in_left) [left_w]   = (DTYPE (*)[left_w   ])in[(bi - 1) + n_tiles * bj];
-				DTYPE (*in_right)[right_w]  = (DTYPE (*)[right_w  ])in[(bi + 1) + n_tiles * bj];
+				DTYPE (*o		)[tile_size] = (DTYPE (*)[tile_size])out[bi][bj];
+				DTYPE (*in_b	)[tile_size] = (DTYPE (*)[tile_size])in[bi][bj];
+				DTYPE (*in_up   )[tile_size] = (DTYPE (*)[tile_size])in[bi - 1][bj];
+				DTYPE (*in_down )[tile_size] = (DTYPE (*)[tile_size])in[bi + 1][bj];
+				DTYPE (*in_left )[width_left ] = (DTYPE (*)[width_left ])in[bi][bj - 1];
+				DTYPE (*in_right)[width_right] = (DTYPE (*)[width_right])in[bi][bj + 1];
 
-				OMP_TASK(inout([tile_size]o) in([tile_size]in_b, [up_h]in_up, [down_h]in_down, [tile_size]in_left, [tile_size]in_right) \
-						firstprivate(bi, bj, tile_size, n, up_h, down_h) private(i, j, ii, jj))
+				OMP_TASK(inout([tile_size]o) in([tile_size]in_b, [height_up]in_up, \
+							[height_down]in_down, [tile_size]in_left, [tile_size]in_right))
 				{
-					for (j = 0; j < RADIUS; j++)
-						for (i = 0; i < tile_size; i++)
+					for (int ii, i = 0; i < RADIUS; i++)
+						for (int jj, j = 0; j < tile_size; j++)
 						{
-							/* i + ii < 0 => ii < -i */
-							for (ii = -RADIUS; ii < -i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_left[j][i + ii + tile_size];
-
-							for (; ii <= RADIUS && ii < tile_size - i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
-
-							for (; ii <= RADIUS; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_right[j][i + ii - tile_size];
-
-							/* j + jj < 0 */
+							/* j + jj < 0 => jj < -j */
 							for (jj = -RADIUS; jj < -j; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_up[up_h + j + jj][i];
+								o[i][j] += weight[jj + 0][0] * in_left[i][j + jj + width_left];
 
-							for (jj = -j; jj < 0; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
+							for (; jj <= RADIUS && jj < tile_size - j; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
 
-							for (jj = 1; jj <= RADIUS; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
-						}
-
-					for (j = tile_size - RADIUS; j < tile_size; j++)
-						for (i = 0; i < tile_size; i++)
-						{
-							for (ii = -RADIUS; ii < -i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_left[j][i + ii + tile_size];
-
-							for (; ii <= RADIUS && ii < tile_size - i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
-
-							for (; ii <= RADIUS; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_right[j][i + ii - tile_size];
-
-							for (jj = 1; jj < tile_size - j; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
-
-							/* j + jj >= tile_size */
-							for (jj = tile_size - j ; jj <= RADIUS; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_down[j + jj - tile_size][i];
-
-							for (jj = -RADIUS; jj < 0; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
-						}
-
-					for (j = RADIUS; j < tile_size - RADIUS; j++)
-						for (i = 0; i < RADIUS; i++)
-						{
-							for (jj = -RADIUS; jj <= RADIUS; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
+							for (; jj <= RADIUS; jj++)
+								o[i][j] += weight[jj + 0][0] * in_right[i][j + jj - tile_size];
 
 							/* i + ii < 0 */
 							for (ii = -RADIUS; ii < -i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_left[j][tile_size + i + ii];
+								o[i][j] += weight[0][ii + 0] * in_up[i + ii + height_up][j];
 
 							for (ii = -i; ii < 0; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
 
 							for (ii = 1; ii <= RADIUS; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
 						}
 
-					for (j = RADIUS; j < tile_size - RADIUS; j++)
-						for (i = tile_size - RADIUS; i < tile_size; i++)
+					for (int ii, i = tile_size - RADIUS; i < tile_size; i++)
+						for (int jj, j = 0; j < tile_size; j++)
 						{
-							for (jj = -RADIUS; jj <= RADIUS; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
+							for (jj = -RADIUS; jj < -j; jj++)
+								o[i][j] += weight[jj + 0][0] * in_left[i][j + jj + width_left];
 
-							for (ii = -RADIUS; ii < 0; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+							for (; jj <= RADIUS && jj < tile_size - j; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
+
+							for (; jj <= RADIUS; jj++)
+								o[i][j] += weight[jj + 0][0] * in_right[i][j + jj - tile_size];
 
 							for (ii = 1; ii < tile_size - i; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
 
 							/* i + ii >= tile_size */
-							for (ii = tile_size - i; ii <= RADIUS; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_right[j][i + ii - tile_size];
+							for (ii = tile_size - i ; ii <= RADIUS; ii++)
+								o[i][j] += weight[0][ii + 0] * in_down[i + ii - tile_size][j];
+
+							for (ii = -RADIUS; ii < 0; ii++)
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
+						}
+
+					for (int ii, i = RADIUS; i < tile_size - RADIUS; i++)
+						for (int jj, j = 0; j < RADIUS; j++)
+						{
+							for (ii = -RADIUS; ii <= RADIUS; ii++)
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
+
+							/* j + jj < 0 */
+							for (jj = -RADIUS; jj < -j; jj++)
+								o[i][j] += weight[jj + 0][0] * in_left[i][j + jj + width_left];
+
+							for (jj = -j; jj < 0; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
+
+							for (jj = 1; jj <= RADIUS; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
+						}
+
+					for (int ii, i = RADIUS; i < tile_size - RADIUS; i++)
+						for (int jj, j = tile_size - RADIUS; j < tile_size; j++)
+						{
+							for (ii = -RADIUS; ii <= RADIUS; ii++)
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
+
+							for (jj = -RADIUS; jj < 0; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
+
+							for (jj = 1; jj < tile_size - j; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
+
+							/* j + jj >= tile_size */
+							for (jj = tile_size - j; jj <= RADIUS; jj++)
+								o[i][j] += weight[jj + 0][0] * in_right[i][j + jj - tile_size];
 						}
 
 					/* center */
-					for (j = RADIUS; j < tile_size - RADIUS; j++)
-						for (i = RADIUS; i < tile_size - RADIUS; i++)
+					for (int ii, i = RADIUS; i < tile_size - RADIUS; i++)
+						for (int jj, j = RADIUS; j < tile_size - RADIUS; j++)
 						{
-							for (jj = -RADIUS; jj <= RADIUS; jj++)
-								o[j][i] += weight[RADIUS][jj + RADIUS] * in_b[j + jj][i];
+							for (ii = -RADIUS; ii <= RADIUS; ii++)
+								o[i][j] += weight[0][ii + 0] * in_b[i + ii][j];
 
-							for (ii = -RADIUS; ii < 0; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+							for (jj = -RADIUS; jj < 0; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
 
-							for (ii = 1; ii <= RADIUS; ii++)
-								o[j][i] += weight[ii + RADIUS][RADIUS] * in_b[j][i + ii];
+							for (jj = 1; jj <= RADIUS; jj++)
+								o[i][j] += weight[jj + 0][0] * in_b[i][j + jj];
 						}
 				}
 			}
 
 		/* add constant to solution to force refresh of neighbor data, if any       */
-		for (bj = 0; bj < n_tiles; bj++)
-			for (bi = 0; bi < n_tiles; bi++)
+		for (int bi = 0; bi < n_tiles; bi++)
+			for (int bj = 0; bj < n_tiles; bj++)
 			{
-				const int j_size = (bj == 0 || bj == n_tiles - 1) ? RADIUS + 1 : tile_size;
-				const int i_size = (bi == 0 || bi == n_tiles - 1) ? RADIUS + 1 : tile_size;
-				DTYPE (*in_bij)[i_size] = (DTYPE(*)[i_size])in[bi + bj * n_tiles];
+				const int tile_height = (bi == 0 || bi == n_tiles - 1) ? RADIUS : tile_size;
+				const int tile_width  = (bj == 0 || bj == n_tiles - 1) ? RADIUS : tile_size;
 
-				if (in_bij == NULL) continue;
+				DTYPE (*block)[tile_width] = (DTYPE (*)[tile_width])in[bi][bj];
+				if (!block) continue;
 
-				OMP_TASK(inout([j_size]in_bij) firstprivate(tile_size) private(i, j))
-				for (j = 0; j < j_size; j++)
-					for (i = 0; i < i_size; i++)
-						in_bij[j][i] += 1.0;
+				OMP_TASK(inout([tile_height]block) firstprivate(tile_size))
+				for (int i = 0; i < tile_height; i++)
+					for (int j = 0; j < tile_width; j++)
+						block[i][j] += 1.0;
 			}
 	}
 
@@ -415,14 +387,14 @@ int main(int argc, char **argv)
 
 	DTYPE norm = 0.0;
 
-	for (j = 1; j < n_tiles - 1; j++)
-		for (i = 1; i < n_tiles - 1; i++)
+	for (int bi = 1; bi < n_tiles - 1; bi++)
+		for (int bj = 1; bj < n_tiles - 1; bj++)
 		{
-			DTYPE (*block)[tile_size] = (DTYPE (*)[tile_size])out[i + j * n_tiles];
-			#pragma omp task reduction(+:norm) out([tile_size]block) private(ii, jj) firstprivate(i, j)
-			for (jj = 0; jj < tile_size; jj++)
-				for (ii = 0; ii < tile_size; ii++)
-					norm += ABS(block[jj][ii]);
+			DTYPE *block = out[bi][bj];
+			#pragma omp task reduction(+:norm) out([tile_size * tile_size]block)
+			for (int ii = 0; ii < tile_size; ii++)
+				for (int jj = 0; jj < tile_size; jj++)
+					norm += ABS(block[jj + ii * tile_size]);
 		}
 
 	#pragma omp taskwait
@@ -434,16 +406,18 @@ int main(int argc, char **argv)
 	** Analyze and output results.
 	********************************************************************************/
 
-	for (ii = 0; ii < n_tiles * n_tiles; ii++)
-	{
-		free(in[ii]);
-		free(out[ii]);
-	}
+	for (int bi = 0; bi < n_tiles; bi++)
+		for (int bj = 0; bj < n_tiles; bj++)
+		{
+			if (in[bi][bj])  free(in[bi][bj]);
+			if (out[bi][bj]) free(out[bi][bj]);
+		}
+
 	free(out);
 	free(in);
 
 	/* verify correctness                                                            */
-	DTYPE reference_norm = (DTYPE)(iterations + 1) * (COEFX + COEFY);
+	DTYPE reference_norm = (DTYPE)(iterations + 1) * (COEFY + COEFX);
 	if (ABS(norm - reference_norm) > EPSILON)
 		printf("ERROR: L1 norm = "FSTR", Reference L1 norm = "FSTR"\n", norm, reference_norm);
 	else

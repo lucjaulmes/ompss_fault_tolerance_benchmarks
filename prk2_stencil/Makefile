@@ -3,5 +3,6 @@ TARGET:=prk2_stencil
 
 include ../common.mk
 
-CPPFLAGS+=-DVALIDATE=1
+CFLAGS+=-Wno-array-bounds
+CPPFLAGS+=-DVALIDATE=1 -DVERBOSE
 LDLIBS+=-lm
