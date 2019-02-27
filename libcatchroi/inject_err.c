@@ -25,18 +25,20 @@
 #include "inject_err.h"
 
 
+enum { NONE = 0, FLIP, PUT, DUE };
 
-typedef struct _seu
+typedef struct _err
 {
+	union { int64_t mask; double mask_as_double; };
 	volatile int64_t *pos;
-	int64_t mask;
+	int64_t region, page;
 	double time;
 	int n_bits, perf_fd;
-	short flip, undo;
+	char type, undo, early;
 	_Atomic int inj;
-	float min_protect;
 	struct perf_event_mmap_page *event_map;
-} seu_t;
+	pthread_t injector_thread;
+} err_t;
 
 
 typedef struct _sample {
@@ -45,12 +47,7 @@ typedef struct _sample {
 } sample_t;
 
 
-static int inject_n_bits = 0, inject_region = -1, inject_undo = 0, inject_flip = 1;
-static int64_t inject_page = -1;
-static double inject_mtbf = 0.;
-
-static seu_t *seu = NULL;
-pthread_t injector_thread = {0};
+static err_t *error = NULL;
 
 
 char *token(char **next)
@@ -71,6 +68,34 @@ char *token(char **next)
 }
 
 
+static inline int64_t pick_bits(const int n_bits)
+{
+	int64_t flip_bits = 0LL;
+
+	/* Pick distinct bits in [0,63] to flip, simultaneously.
+	 * Store them in sorted order, to remember which are already flipped. */
+	int i, j, b, distinct_bits[n_bits];
+	for (i = 0; i < n_bits; i++)
+	{
+		/* new bit to flip, as the b-th _unflipped_ bit */
+		b = ((double)rand() / RAND_MAX) * (64 - i);
+
+		for (j = i - 1; j >= 0; --j)
+		{
+			if (distinct_bits[j] >= b + j + 1)
+				distinct_bits[j + 1] = distinct_bits[j];
+			else
+				break;
+		}
+
+		distinct_bits[j + 1] = b + j + 1;
+		flip_bits ^= 1LL << (b + j + 1);
+	}
+
+	return flip_bits;
+}
+
+
 void inject_parse_env()
 {
 #define required_argument 1
@@ -86,6 +111,7 @@ void inject_parse_env()
 		{"page",    required_argument, NULL, 'a'},
 		{"mtbf",    required_argument, NULL, 'm'},
 		{"seed",    required_argument, NULL, 's'},
+		{"put",     required_argument, NULL, 'p'},
 		{"due",     no_argument,	   NULL, 'd'},
 		{"undo",    no_argument,       NULL, 'u'},
 	};
@@ -96,6 +122,7 @@ void inject_parse_env()
 		return;
 
 	int seed = 0;
+	err_t inject = {.pos = NULL, .type = NONE, .time = -1., .page = -1, .region = -1, .inj = 0};
 
 	// Home-made option parsing, like getopts except don't call on it, since it interferes with calling it from main.
 	for (char *optarg = NULL, *optnext = argstr, *optstr = token(&optnext); optstr != NULL; optstr = token(&optnext), optarg = NULL)
@@ -159,28 +186,38 @@ void inject_parse_env()
 			switch (opt)
 			{
 			case 'n':
-				inject_n_bits = atoi(optarg);
+				inject.type   = FLIP;
+				inject.n_bits = atoi(optarg);
 				break;
 			case 'v':
-				inject_region = atoi(optarg);
+				inject.region = atoi(optarg);
 				break;
 			case 'a':
-				inject_page   = strtoll(optarg, NULL, 0);
+				inject.page   = strtoll(optarg, NULL, 0);
 				break;
 			case 'm':
-				inject_mtbf   = atof(optarg);
+				inject.time   = atof(optarg) * (double)rand() / RAND_MAX;
 				break;
 			case 's':
 				seed          = atoi(optarg);
 				break;
 			case 'u':
-				inject_undo   = 1;
+				inject.undo   = 1;
+				break;
+			case 'p':
+				inject.type   = PUT;
+				inject.mask   = strtoll(optarg, NULL, 0);
 				break;
 			case 'd':
-				inject_flip   = 0;
+				inject.type   = DUE;
 			}
 		}
 	}
+
+	if (inject.type == NONE)
+		return;
+	else if (inject.time < 0 || (inject.page < 0 && inject.region < 0))
+		err(1, "Wrong parameters");
 
 	if (seed == 0)
 	{
@@ -189,6 +226,11 @@ void inject_parse_env()
 		seed = t.tv_sec + t.tv_usec;
 	}
 	srand(seed);
+
+	if (inject.type == FLIP)
+		inject.mask = pick_bits(inject.n_bits);
+
+	error = memcpy(malloc(sizeof(err_t)), &inject, sizeof(err_t));
 }
 
 
@@ -211,34 +253,6 @@ double exponential(const double lambda, const double x)
 
 	return y;
 }
-
-inline int64_t pick_bits(const int n_bits)
-{
-	int64_t flip_bits = 0LL;
-
-	/* Pick distinct bits in [0,63] to flip, simultaneously.
-	 * Store them in sorted order, to remember which are already flipped. */
-	int i, j, b, distinct_bits[n_bits];
-	for (i = 0; i < n_bits; i++)
-	{
-		/* new bit to flip, as the b-th _unflipped_ bit */
-		b = ((double)rand() / RAND_MAX) * (64 - i);
-
-		for (j = i - 1; j >= 0; --j)
-		{
-			if (distinct_bits[j] >= b + j + 1)
-				distinct_bits[j + 1] = distinct_bits[j];
-			else
-				break;
-		}
-
-		distinct_bits[j + 1] = b + j + 1;
-		flip_bits ^= 1LL << (b + j + 1);
-	}
-
-	return flip_bits;
-}
-
 
 static inline
 void sleep_ns(double ns)
@@ -270,17 +284,30 @@ rdtsc()
 }
 
 
-void* inject_err(void* ignore __attribute__((unused)))
+void* inject_error(void* ignore)
 {
+	err_t *error = ignore;
+
 	// default cancellability state + nanosleep is a cancellation point
-	sleep_ns(seu->time);
+	sleep_ns(error->time);
 
-	if (seu->flip)
-		*((int64_t*)seu->pos) ^= seu->mask;
-	else
-		ioctl(seu->perf_fd, PERF_EVENT_IOC_REFRESH, 1);
+	int64_t *ptr = (int64_t*)error->pos;
+	if (ptr == NULL)
+		error->early++;
+	else if (error->type == FLIP)
+		*ptr ^= error->mask;
+	else if (error->type == PUT)
+	{
+		int64_t get = *ptr;
+		*ptr = error->mask;
+		error->mask = get;
+	}
+	else if (error->type == DUE)
+		ioctl(error->perf_fd, PERF_EVENT_IOC_REFRESH, 1);
+	else if (error->type != NONE)
+		err(-1, "Unrecognised error type");
 
-	seu->inj++;
+	error->inj++;
 
 	return NULL;
 }
@@ -288,54 +315,63 @@ void* inject_err(void* ignore __attribute__((unused)))
 
 void inject_start()
 {
-	if (seu == NULL)
+	if (error == NULL)
 		return;
 
-	if (!seu->flip)
+	if (error->type == DUE)
 	{
 		struct perf_event_attr pe = {
-			.type = PERF_TYPE_BREAKPOINT, .bp_type = HW_BREAKPOINT_RW, .bp_len = HW_BREAKPOINT_LEN_8, .bp_addr = (long long)seu->pos,
+			.type = PERF_TYPE_BREAKPOINT, .bp_type = HW_BREAKPOINT_RW, .bp_len = HW_BREAKPOINT_LEN_8, .bp_addr = (long long)error->pos,
 			.size = sizeof (struct perf_event_attr), .config = 0, .pinned = 1, .exclude_kernel = 1, .exclude_hv = 1,
 			.sample_period = 1, .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_DATA_SRC, .wakeup_events = 1
 		};
 
-		seu->perf_fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
-		if (seu->perf_fd < 0 || MAP_FAILED == (
-				 seu->event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, seu->perf_fd, 0)
+		error->perf_fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+		if (error->perf_fd < 0 || MAP_FAILED == (
+				 error->event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0)
 		))
 			err(1, "failed opening watchpoint");
 
-		ioctl(seu->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
 	}
 
-	void *d = &seu->mask;
 	printf("inject_flip:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%.09fs\n",
-			seu->flip, seu->mask, *(double*)d, (void*)seu->pos, seu->undo, seu->time / 1e9);
+			error->type, error->mask, error->mask_as_double, (void*)error->pos, error->undo, error->time / 1e9);
 	fflush(stdout);
 
-	if (!pthread_create(&injector_thread, NULL, &inject_err, (void*)seu) == 0)
+	if (!pthread_create(&error->injector_thread, NULL, &inject_error, (void*)error) == 0)
 		err(errno, "Failed to create the injector thread");
 }
 
 
 void inject_stop()
 {
-	if (seu == NULL)
+	if (error == NULL)
 		return;
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
 	char buf[1024];
-	snprintf(buf, sizeof(buf), "inject_done:%d", seu->inj);
+	snprintf(buf, sizeof(buf), "inject_done:%d", error->inj);
 
-	pthread_join(injector_thread, NULL);
+	pthread_join(error->injector_thread, NULL);
 
-	if (seu->inj > 0 && seu->undo)
+	if (error->inj > 0 && error->undo)
 	{
-		if (seu->flip)
-			*seu->pos ^= seu->mask;
-		else if (seu->event_map->data_tail < seu->event_map->data_head)
+		if (error->type == FLIP)
+			*error->pos ^= error->mask;
+		else if (error->type == PUT)
 		{
-			sample_t *sample = (sample_t*)((intptr_t)seu->event_map + seu->event_map->data_offset + seu->event_map->data_tail);
+			int64_t tmp = *error->pos;
+			*error->pos = error->mask;
+			error->mask = tmp;
+		}
+	}
+
+	if (error->type == DUE)
+	{
+		if (error->event_map->data_tail < error->event_map->data_head)
+		{
+			sample_t *sample = (sample_t*)((intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_tail);
 			int mem_op = (sample->data_src >> PERF_MEM_OP_SHIFT) & (PERF_MEM_OP_LOAD | PERF_MEM_OP_STORE);
 
 #ifdef __x86_64__
@@ -351,7 +387,7 @@ void inject_stop()
 
 			size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd), len = strnlen(buf, sizeof(buf));
 			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%llu perf_raw_mem_op:%d sample_memops:%lu",
-					seu->event_map->data_head - seu->event_map->data_tail, mem_op, memops);
+					error->event_map->data_head - error->event_map->data_tail, mem_op, memops);
 
 			for (unsigned m = 0; m < memops; m++)
 			{
@@ -366,48 +402,47 @@ void inject_stop()
 		}
 		else
 			strncat(buf, " inject_samples:0", sizeof(buf) - strnlen(buf, sizeof(buf)));
+
+		munmap(error->event_map, error->event_map->data_offset + error->event_map->data_size);
+		close(error->perf_fd);
 	}
+
 	printf("%s\n", buf);
 
-	if (!seu->flip)
-	{
-		munmap(seu->event_map, seu->event_map->data_offset + seu->event_map->data_size);
-		close(seu->perf_fd);
-	}
-
-	free(seu);
+	free(error);
 	fflush(stdout);
 }
 
 
 void register_target_region(int id, void *target_ptr, size_t target_size)
 {
-	// WARNING: hardcoded 4K page size
-	int64_t target_page_pos = inject_page * 4096;
-	inject_page -= (target_size + 4095) / 4096;
-
-	if ((target_page_pos < 0 && inject_region < 0)|| (target_page_pos >= 0 && inject_page >= 0) || (inject_region >= 0 && id != inject_region)
-			|| (inject_n_bits <= 0 && inject_flip > 0) || inject_mtbf <= 0)
+	if (error == NULL || error->pos != NULL)
 		return;
-
-	seu = calloc(1, sizeof(*seu));
-
-	double rand_pos = (double)rand() / RAND_MAX;
-	size_t flip_word;
-
-	if (inject_region >= 0)
-		flip_word = rand_pos * target_size / sizeof(int64_t);
-	else
+	else if (error->region >= 0)
 	{
-		size_t page_size = (int64_t)target_size >= target_page_pos + 4096 ? 4096 : target_size - target_page_pos;
-		flip_word = (target_page_pos + page_size * rand_pos) / sizeof(int64_t);
+		if (error->region == id)
+		{
+			intptr_t flip_word = ((double)rand() / RAND_MAX) * (target_size / sizeof(int64_t));
+			error->pos = (int64_t*)target_ptr + flip_word;
+		}
 	}
+	else if (error->page >= 0)
+	{
+		int64_t page_size = 4096; // sysconf(_SC_PAGESIZE) --  WARNING: hardcoded 4K page size
+		const int64_t target_pages = (target_size + page_size - 1) / page_size;
 
-	seu->inj = 0;
-	seu->pos = ((int64_t*)target_ptr) + flip_word;
-	seu->time = inject_mtbf * (double)rand() / RAND_MAX;
-	seu->mask = pick_bits(inject_n_bits);
-	seu->flip = inject_flip;
-	seu->undo = inject_undo;
-	seu->n_bits = inject_n_bits;
+		if (error->page < target_pages)
+		{
+			intptr_t target_left = (intptr_t)target_size - error->page * page_size;
+			if (page_size > target_left)
+				page_size = target_left;
+
+			intptr_t flip_word = (error->page + (double)rand() / RAND_MAX) * (page_size / sizeof(int64_t));
+			error->pos = (int64_t*)target_ptr + flip_word;
+		}
+
+		error->page -= target_pages;
+	}
+	else
+		err(-1, "Can not find an injection target!");
 }
