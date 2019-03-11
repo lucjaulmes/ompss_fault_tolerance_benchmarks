@@ -7,7 +7,9 @@ CPPFLAGS+=-DNDEBUG -DVALIDATE
 LDLIBS+=-lm
 
 # Get a CBLAS implementation
+ifeq ($(filter-out power,$(BSC_MACHINE)),)
 LDLIBS+=-lcblas -llapack
+endif
 
 # mn
 ifeq ($(BSC_MACHINE),mn4)
@@ -23,4 +25,12 @@ CBLAS_HOME=/apps/ATLAS/3.10.2
 CPPFLAGS+=-I$(CBLAS_HOME)/include
 LDFLAGS+=-L$(CBLAS_HOME)/lib
 LDLIBS+=-lcblas -latlas
+endif
+
+# power8
+ifeq ($(BSC_MACHINE),power8)
+OPENBLAS_HOME=/apps/EB/software/OpenBLAS/0.2.19-gompic-2016.10-LAPACK-3.6.1
+CPPFLAGS+=-I$(OPENBLAS_HOME)/include
+LDFLAGS+=-L$(OPENBLAS_HOME)/lib
+LDLIBS+=-lopenblas
 endif

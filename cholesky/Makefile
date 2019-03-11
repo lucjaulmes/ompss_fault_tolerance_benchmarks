@@ -26,3 +26,11 @@ CPPFLAGS += -I$(CBLAS_HOME)/include
 LDFLAGS+=-L$(CBLAS_HOME)/lib -L$(LAPACK_HOME)/lib -Wl,-rpath,$(LAPACK_HOME)/lib
 LDLIBS+=-lblas -lcblas -latlas -lgfortran $(LAPACK_HOME)/lib/liblapack.a
 endif
+
+# power8
+ifeq ($(BSC_MACHINE),power8)
+OPENBLAS_HOME=/apps/EB/software/OpenBLAS/0.2.19-gompic-2016.10-LAPACK-3.6.1
+CPPFLAGS+=-I$(OPENBLAS_HOME)/include
+LDFLAGS+=-L$(OPENBLAS_HOME)/lib
+LDLIBS+=-lopenblas
+endif
