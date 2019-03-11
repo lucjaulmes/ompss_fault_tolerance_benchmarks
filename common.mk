@@ -38,6 +38,7 @@ O = 3
 %_debug:O = 0
 
 %_seq.o   %_seq  :MCC := $(CC)
+%_seq.o   %_seq  :MCXX:= $(CXX)
 %_seq.o   %_seq  :OMPSSFLAGS = -Wno-unknown-pragmas -Wno-unused-variable
 %_instr.o %_instr:OMPSSFLAGS += --instrument
 %_debug.o %_debug:OMPSSFLAGS += --debug
