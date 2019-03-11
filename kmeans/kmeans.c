@@ -176,7 +176,7 @@ void compare_with_file(const char *checkfile, int32_t ncentres, int32_t dim, int
 }
 
 static inline
-double wcss(int32_t ncentres, int32_t dim, int n_points, const double (*points)[dim], double (*centres)[dim], int *assignment)
+double wcss(int32_t dim, int n_points, const double (*points)[dim], double (*centres)[dim], int *assignment)
 {
 	// Compute within-cluster sum of squares (WCSS)
 	double wcss = 0;
@@ -304,7 +304,7 @@ int main(int argc, char **argv)
 	else
 	{
 		recompute_centres_from_assignments(ncentres, dim, n_points, points, centres, sum_assigned_points, num_assigned_points, assignment);
-		double run_wcss = wcss(ncentres, dim, n_points, points, centres, assignment);
+		double run_wcss = wcss(dim, n_points, points, centres, assignment);
 		if (ref_wcss >= 0.)
 			printf("Verification: relative increase in wcss=%g\n", run_wcss / ref_wcss - 1);
 	}
