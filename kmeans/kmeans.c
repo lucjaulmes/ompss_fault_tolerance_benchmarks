@@ -45,7 +45,12 @@ static inline
 void assign_point(const int dim, const double point[dim], int point_assignment, long *num_assigned_points, double (*sum_assigned_points)[dim])
 {
 	for (int j = 0; j < dim; j++)
-		sum_assigned_points[point_assignment][j] += point[j];
+	{
+		register double *sum_j = sum_assigned_points[point_assignment] + j, pj = point[j];
+		#pragma omp atomic
+		*sum_j += pj;
+	}
+	#pragma omp atomic
 	num_assigned_points[point_assignment]++;
 }
 
@@ -190,7 +195,7 @@ void recompute_centres_from_assignments(int32_t ncentres, int32_t dim, int n_poi
 	memset(num_assigned_points, 0, ncentres * sizeof(num_assigned_points[0]));
 	memset(sum_assigned_points, 0, ncentres * sizeof(num_assigned_points[0]));
 
-	#pragma omp taskloop reduction(+:[ncentres]centres, [ncentres]num_assigned_points)  num_tasks(10) // group => implicit taskwait
+	#pragma omp taskloop concurrent([ncentres]num_assigned_points, [ncentres]sum_assigned_points)  num_tasks(10) // group => implicit taskwait
 	for (int i = 0; i < n_points; i++)
 		assign_point(dim, points[i], assignment[i], num_assigned_points, sum_assigned_points);
 
@@ -266,7 +271,7 @@ int main(int argc, char **argv)
 
 		// Distribute points to closest centre
 		#pragma omp taskloop grainsize(chunk_size) nogroup in([ncentres]centres, points[p;chunk_size]) inout(assignment[p;chunk_size]) \
-				reduction(+:changed, [ncentres]sum_assigned_points, [ncentres]num_assigned_points)
+				reduction(+:changed) concurrent([ncentres]sum_assigned_points, [ncentres]num_assigned_points)
 		for (long p = 0; p < n_points; p++)
 			changed += assign_point_to_nearest(dim, points[p], ncentres, centres, assignment + p, num_assigned_points, sum_assigned_points);
 
