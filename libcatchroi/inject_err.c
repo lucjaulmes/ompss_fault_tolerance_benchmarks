@@ -323,7 +323,7 @@ void inject_start()
 		struct perf_event_attr pe = {
 			.type = PERF_TYPE_BREAKPOINT, .bp_type = HW_BREAKPOINT_RW, .bp_len = HW_BREAKPOINT_LEN_8, .bp_addr = (long long)error->pos,
 			.size = sizeof (struct perf_event_attr), .config = 0, .pinned = 1, .exclude_kernel = 1, .exclude_hv = 1,
-			.sample_period = 1, .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_DATA_SRC, .wakeup_events = 1
+			.sample_period = 1, .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_DATA_SRC, .wakeup_events = 1, .precise_ip = 3
 		};
 
 		error->perf_fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
@@ -372,8 +372,15 @@ void inject_stop()
 		if (error->event_map->data_tail < error->event_map->data_head)
 		{
 			sample_t *sample = (sample_t*)((intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_tail);
+			if (sample->header.type != PERF_RECORD_SAMPLE || sample->header.size != sizeof(*sample))
+				errx(1, "Unexpected sample metadata");
+
 			int mem_op = (sample->data_src >> PERF_MEM_OP_SHIFT) & (PERF_MEM_OP_LOAD | PERF_MEM_OP_STORE);
 
+			size_t len = strnlen(buf, sizeof(buf));
+			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%lu sample_header:%x sample_precise:%d perf_raw_mem_op:%d",
+					(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t),
+					sample->header.misc, (sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, mem_op);
 #ifdef __x86_64__
 			// Use XED to decode instructions, in particular find out if it was reading or writing
 			xed_tables_init();
@@ -385,9 +392,9 @@ void inject_stop()
 			if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
 				printf("xed_decode failed\n");
 
-			size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd), len = strnlen(buf, sizeof(buf));
-			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%llu perf_raw_mem_op:%d sample_memops:%lu",
-					error->event_map->data_head - error->event_map->data_tail, mem_op, memops);
+			size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
+			len = strnlen(buf, sizeof(buf));
+			snprintf(buf + len, sizeof(buf) - len, " sample_memops:%lu", memops);
 
 			for (unsigned m = 0; m < memops; m++)
 			{
@@ -395,6 +402,20 @@ void inject_stop()
 				snprintf(buf + len, sizeof(buf) - len, " memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
 					m, xed_decoded_inst_mem_read(&xedd, 0), m, xed_decoded_inst_mem_written(&xedd, 0),
 					m, xed_decoded_inst_mem_written_only(&xedd, 0));
+			}
+#elif defined(__powerpc64__)
+			uint32_t *instr = (uint32_t*)sample->ip;
+
+			for (int i = -1; i < 2; i++)
+			{
+				uint32_t primary_opcode = (instr[i] >> 26) & 0x3fU;
+				uint32_t st = (primary_opcode & 0x24U) == 0x24U;
+				uint32_t ld = (primary_opcode & 0x24U) == 0x20U;
+
+				len = strnlen(buf, sizeof(buf));
+				snprintf(buf + len, sizeof(buf) - len,
+						"\n\tsample_offset:%2d sample_addr:%p sample_instr:%x primary_opcode:%d memop_read:%u memop_write:%u",
+						i, (void*)(instr + i), instr[i], primary_opcode, ld, st);
 			}
 #else
 #  error "Architecture not implemented for decoding instructions"

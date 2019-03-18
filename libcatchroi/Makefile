@@ -41,7 +41,7 @@ uninstall:
 .PHONY: make clean install uninstall
 
 
-ifeq ($(shell uname -p),x86_64)
+ifeq ($(INJECT)@$(shell uname -p),1@x86_64)
 XED_PATH?=$(HOME)/.local
 
 CPPFLAGS+=-I$(XED_PATH)/include
