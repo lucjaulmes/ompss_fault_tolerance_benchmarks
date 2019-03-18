@@ -16,7 +16,7 @@ ifeq ($(BSC_MACHINE),mn4)
 CBLAS_HOME=/apps/ATLAS/3.10.3/GCC
 CPPFLAGS+=-I$(CBLAS_HOME)/include
 LDFLAGS+=-L$(CBLAS_HOME)/lib
-LDLIBS+=-latlas
+LDLIBS+=-lsatlas
 endif
 
 # nord

@@ -12,10 +12,10 @@ endif
 
 # mn
 ifeq ($(BSC_MACHINE),mn4)
-CBLAS_HOME=/apps/ATLAS/3.10.3/GCC-8.1
+CBLAS_HOME=/apps/ATLAS/3.10.3/GCC
 CPPFLAGS += -I$(CBLAS_HOME)/include
 LDFLAGS+=-L$(CBLAS_HOME)/lib -Wl,-rpath,$(CBLAS_HOME)/lib
-LDLIBS+=-lptcblas -llapack -latlas -lsatlas -pthread
+LDLIBS+=-lcblas -llapack -latlas -lsatlas
 endif
 
 # nord (ATLAS just for cblas.h)
