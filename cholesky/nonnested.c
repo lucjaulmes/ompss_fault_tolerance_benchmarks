@@ -610,7 +610,6 @@ void TILE(potrf)(REAL *A, int NB)
 	LONG INFO;
 	LAPACK(potrf)(&L, &NB, A, &NB, &INFO);
 #  else
-	mpla
 	LONG INFO;
 	LAPACK(potrf)(&L, &NB, A, &NB, &INFO);
 #  endif
@@ -631,7 +630,7 @@ void TILE(potrf)(REAL *A, int NB)
 OMP_TASK(in([NB*NB]A, [NB*NB]B) inout([NB*NB]C) label(TILE(gemm)), GEMM_TARGET)
 void TILE(gemm)(REAL *A, REAL *B, REAL *C, int NB)
 {
-	unsigned char TR = 'T', NT = 'N';
+	char TR = 'T', NT = 'N';
 	REAL DONE = 1.0, DMONE = -1.0;
 #if GEMM_SMP
 #if ATLAS
@@ -673,7 +672,7 @@ void TILE(syrk)(REAL *A, REAL *C, int NB)
 	//int y = x + x;
 	//printf("in syrk tile\n");
 
-	unsigned char LO = 'L', NT = 'N';
+	char LO = 'L', NT = 'N';
 	REAL DONE = 1.0, DMONE = -1.0;
 #if POTRF_SMP
 #if ATLAS
