@@ -1,0 +1,228 @@
+miniAMR mini-application
+
+--------------------------------------
+Contents of this README file:
+1.      miniAMR overview
+2.      running miniAMR
+3.      notes about the code
+--------------------------------------
+
+--------------------------------------
+1. miniAMR overview
+
+     miniAMR applies a stencil calculation on a unit cube computational domain,
+which is divided into blocks. The blocks all have the same number of cells
+in each direction and communicate ghost values with neighboring blocks. With
+adaptive mesh refinement, the blocks can represent different levels of
+refinement in the larger mesh. Neighboring blocks can be at the same level
+or one level different, which means that the length of cells in neighboring
+blocks can differ by only a factor of two in each direction. The calculations
+on the variables in each cell is an averaging of the values in the chosen
+stencil. The refinement and coarsening of the blocks is driven by objects
+that are pushed through the mesh. If a block intersects with the surface
+or the volume of an object, then that block can be refined. There is also
+an option to uniformly refine the mesh. Each cell contains a number of
+variables, each of which is evaluated indepently.
+
+
+-------------------
+2. Running miniAMR:
+
+ miniAMR can be run like this:
+
+   % ./bin/miniAMR
+
+ where <mpi-run-command> varies from system to system but usually looks  something like 'mpirun -np 4 ' or similar.
+
+ Execution is then driven entirely by the default settings, as configured in default-settings.h. Options may be listed using
+
+    % ./bin/miniAMR --help
+
+     To run the program, there are several arguments on the command line.
+The list of arguments and their defaults is as follows:
+
+   --nx - block size in x
+   --ny - block size in y
+   --nz - block size in z
+      These control the size of the blocks in the mesh.  All of these need to
+      be even and greater than zero.  The default is 10 for each variable.
+
+   --init_x - initial blocks in x
+   --init_y - initial blocks in y
+   --init_z - initial blocks in z
+      These control the number of the blocks on each processor in the
+      initial mesh.  These need to be greater than zero.  The default
+      is 1 block in each direction per processor.  The initial mesh
+      is a unit cube regardless of the number of blocks.
+
+   --max_blocks - maximun number of blocks per processor
+      The maximun number of blocks used per processor.  This is the number of
+      blocks that will be allocated at the start of the run and the code will
+      fail if this number is exceeded.  The default is 500 blocks.
+
+   --num_refine - number of levels of refinement
+      This is the number of levels of refinement that blocks which are refined
+      will be refined to.  If it is zero then the mesh will not be refined.
+      the default is 5 levels of refinement.
+
+   --block_change - number of levels a block can change during refinement
+      This parameter controls the number of levels that a block can change
+      (either refining or coarsening) during a refinement step.  The default
+      is the number of levels of refinement.
+
+   --uniform_refine - if 1, then grid is uniformly refined
+      This controls whether the mesh is uniformly refined.  If it is 1 then the
+      mesh will be uniformly refined, while if it is zero, the refinement will
+      be controlled by objects in the mesh.  The default is 1.
+
+   --refine_freq - frequency (in timesteps) of checking for refinement
+      This determines the frequency (in timesteps) between checking if
+      refinement is needed.  The default is every 5 timesteps.
+
+   --num_vars - number of variables (> 0)
+      The number of variables the will be calculated on and communicated.
+      The default is 40 variables.
+
+   --comm_vars - number of vars to communicate together
+      The number of variables that will communicated together.  This will
+      allow shorter but more variables if it is set to something less than
+      the total number of variables.  The default is zero which will
+      communicate all of the variables at once.
+
+   --num_tsteps - number of timesteps (> 0)
+      The number of timesteps for which the simulation will be run.  The
+      default is 20.
+
+   --stages_per_ts - number of comm/calc stages per timestep
+      The number of calculate/communicate stages per timestep.  The default
+      is 20.
+
+   --permute - (no argument) permute communication directions
+      If this is set, then the order of the communication directions will
+      be permuted through the six options available.  The default is
+      to send messages in the x direction first, then y, and then z.
+
+   --code - change the way communication is done
+      The default is 0 which communicates only the ghost values that are
+      needed.  Setting this to 1 sends all of the ghost values, and setting
+      this to 2 also does all of the message processing (refinement or
+      unrefinement) to be done on the sending side.  This allows us to
+      more closely minic the communication behaviour of codes.
+
+   --checksum_freq - number of stages between checksums
+      The number of stages between calculating checksums on the variables.
+      The default is 5.  If it is zero, no checks are performed.
+
+   --stencil - 7 or 27 point 3D stencil
+      The 3D stencil used for the calculations.  It can be either 7 or 27
+      and the default is 7 since the 27 point calculation will not conserve
+      the sum of the variables except for the case of uniform refinement.
+
+   --error_tol - (e^{-error_tol} ; >= 0) 
+      This determines the error tolerance for the checksums for the variables.
+      the tolerance is 10 to the negative power of error_tol.  The default
+      is 8, so the default tolerance is 10^(-8).
+
+   --report_perf - (0 .. 15)
+      This determines how the performance output is displayed.  The default
+      is YAML output (value of 1).  There are four output modes and each is
+      controlled by a bit in the value.  The YAML output (to a file called
+      results.yaml) is controlled by the first bit (report_perf & 1), the 
+      text output file (results.txt) is controlled by the second bit
+      (report_perf & 2), the output to standard out is controlled by the
+      third bit (report_perf & 4), and the output of block decomposition
+      at each refine step is controlled by the forth bit (report_perf & 8).
+      These options can be combined in any way desired and zero to four
+      of these options can be used in any run.  Setting report_perf to 0
+      will result in no output.
+
+   --refine_freq - frequency (timesteps) of refinement (0 for none)
+      This determines how frequently (in timesteps) the mesh is checked
+      and refinement is done.  The default is every 5 timesteps.  If
+      uniform refinement is turned on, the setting of refine_freq does
+      not matter and the mesh will be refined before the first timestep.
+
+   --refine_ghosts - (no argument)
+      The default is to not use the ghost cells of a block to determine if
+      that block will be refined.  Specifying this flag will allow those
+      ghost cells to be used.
+
+   --num_objects - (>= 0) number of objects to cause refinement
+      The number of objects on which refinement is based.  Default is zero.
+
+   --object - type, position, movement, size, size rate of change
+      The object keyword has 14 arguments.  The first two are integers
+      and the rest are floating point numbers.  They are:
+      type - The type of object.  There is 16 types of objects.  They include
+             the surface of a rectangle (0), a solid rectangle (1),
+             the surface of a spheroid (2), a solid spheroid (3),
+             the surface of a hemispheroid (+/- with 3 cutting planes)
+             (4, 6, 8, 10, 12, 14),
+             a solid spheroid (+/- with 3 cutting planes)(5, 7, 9, 11, 13, 15),
+             the surface of a cylinder (20, 22, 24),
+             and the volume of a cylinder (21, 23, 25).
+      bounce - If this is 1 then an object will bounce off of the walls
+               when the center hits an edge of the unit cube.  If it is
+               zero, then the object can leave the mesh.
+      center - Three doubles that determine the center of the object in the
+               x, y, and z directions.
+      move - Three doubles that determine the rate of movement of the center
+             of the object in the x, y, and z directions.  The object moves
+             this far at each timestep.
+      size - The initial size of the object in the x, y, and z directions.
+             If any of these become negative, the object will not be used
+             in the calculations to determine refinement.  These sizes are
+             from the center to the edge in the specified direction.
+      inc - The change in size of the object in the x, y, and z directions.
+
+ EXTRA OPTIONS ADDED IN THE TRANSLATION TO OMPSS:
+   --original_comm - (no argument) original communication routines
+      The program has a new halo communication routine that is more
+      coarse grained than the original ones: instead of a task for
+      every pair of neighbouring faces, there is a task for every
+      block that reads the neighbour faces and writes the halos to the
+      block. This flag goes back to the original communication
+      routines. When code != 0 or stencil == 27, the communications
+      are done using the original routines no matter what.
+
+  --merge_checksum - (no argument)
+     With this flag, the checksums are calculated in the same tasks as
+     the stencil updates. By default, the checksums have their own
+     tasks (considerably fine grained).
+
+
+Examples:
+
+Two moving spheres with 16 blocks initially (using the new
+communication routine and calculating the checksums in the stencil
+tasks):
+
+./bin/miniAMR --num_refine 4 --max_blocks 50000 --init_x 4 --init_y 2 --init_z 2 --nx 8 --ny 8 --nz 8 --num_objects 2 --object 2 0 -1.10 -1.10 -1.10 0.030 0.030 0.030 1.5 1.5 1.5 0.0 0.0 0.0 --object 2 0 0.5 0.5 1.76 0.0 0.0 -0.025 0.75 0.75 0.75 0.0 0.0 0.0 --num_tsteps 100 --checksum_freq 4 --stages_per_ts 16 --num_vars 40 --merge_checksum
+
+
+-------------------
+3. The code:
+
+   block.c            Routines to split and recombine blocks
+   check_sum.c        Calculates check_sum for the arrays
+   comm_block.c       Communicate new location for block during refine
+   comm.c             General routine to do interblock communication
+   comm_alt.c         A more coarse-grain communication method for 7-block stencils
+   driver.c           Main driver
+   init.c             Initialization routine
+   main.c             Main routine that reads command line and launches program
+   move.c             Routines that check overlap of objects and blocks
+   pack.c             Pack and unpack blocks to move
+   plot.c             Write out block information for plotting
+   profile.c          Write out performance data
+   rcb.c              Load balancing routines
+   refine.c           Routines to direct refinement step
+   stencil.c          Perform stencil calculations
+   target.c           Add/subtract blocks to reach a target number
+   task_functions.c   Sequential kernels for some tasks      
+   util.c             Utility routines for timing and allocation
+
+-- End README file.
+
+Courtenay T. Vaughan
+(ctvaugh@sandia.gov)
