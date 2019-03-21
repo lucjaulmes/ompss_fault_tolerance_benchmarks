@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <float.h>
 #include <sys/time.h>
 #include <err.h>
 #include <string.h>
@@ -81,55 +82,77 @@ void genmat(int NB, int BS, p_block_t A[NB][NB])
 }
 
 
-#pragma omp task in([BS]ref_block, [BS]to_comp) out(*mse)
-void are_blocks_equal(int BS, float (*ref_block)[BS], float (*to_comp)[BS], float *mse)
+#pragma omp task in([BS]ref_block, [BS]to_comp) reduction(+: [BS]col_diffs)
+void sum_col_diffs(int BS, float (*ref_block)[BS], float (*to_comp)[BS], float *col_diffs)
 {
-	int i, j;
+	for (int i = 0; i < BS; i++)
+		for (int j = 0; j < BS; j++)
+			col_diffs[j] += fabsf(ref_block[i][j] - to_comp[i][j]);
+}
 
-	*mse = 0.0;
-	for (i = 0; i < BS; i++)
-		for (j = 0; j < BS; j++)
+#pragma omp task in([BS]ref_block, [BS]to_comp) out(*max_diff)
+void maxdiff(int BS, float (*ref_block)[BS], float (*to_comp)[BS], float *max_diff)
+{
+	for (int i = 0; i < BS; i++)
+		for (int j = 0; j < BS; j++)
 		{
-			float diff = ref_block[i][j] - to_comp[i][j];
-			if (*mse < diff * diff)
-				*mse = diff * diff;
+			float diff = fabsf(ref_block[i][j] - to_comp[i][j]);
+			if (*max_diff < diff)
+				*max_diff = diff;
 		}
+}
 
-	*mse = sqrt(*mse);
+
+#pragma omp task in([BS]block) reduction(+: [BS]col_sums)
+void sum_cols(int BS, float (*block)[BS], float *col_sums)
+{
+	for (int i = 0; i < BS; i++)
+		for (int j = 0; j < BS; j++)
+			col_sums[j] += fabsf(block[i][j]);
 }
 
 
 int compare_mat(int NB, int BS, p_block_t X[NB][NB], p_block_t Y[NB][NB], struct timeval *stop)
 {
-	int ii, jj;
-	float sq_error[NB][NB];
-	int some_difference = 0;
-
 	p_block_t zero_block = allocate_clean_block(BS);
 
-	for (ii = 0; ii < NB; ii++)
-		for (jj = 0; jj < NB; jj++)
+	float *colsum_diff = malloc(BS * sizeof(*colsum_diff)), *colsum_A = malloc(BS * sizeof(*colsum_diff));
+	float colmax_diff = 0.0, colmax_A = 0.0, max_diff = 0.0;
+
+	for (int jj = 0; jj < NB; jj++)
+	{
+		// Compute the infinity norm of X and |X-Y|, batched per column blocks
+		memset(colsum_diff, 0, BS * sizeof(*colsum_diff));
+		memset(colsum_A, 0, BS * sizeof(*colsum_A));
+		for (int ii = 0; ii < NB; ii++)
 		{
-			p_block_t lhs = X[ii][jj] == NULL ? zero_block : X[ii][jj];
-			p_block_t rhs = Y[ii][jj] == NULL ? zero_block : Y[ii][jj];
-
-			sq_error[ii][jj] = 0.0f;
-			if (lhs != zero_block || rhs != zero_block)
-				are_blocks_equal(BS, lhs, rhs, &sq_error[ii][jj]);
-		}
-
-	/* Alternative to put wait on */
-	#pragma omp taskwait
-
-	for (ii = 0; ii < NB; ii++)
-		for (jj = 0; jj < NB; jj++)
-			if (sq_error[ii][jj] > 1e-8)
+			if (X[ii][jj] || Y[ii][jj])
 			{
-				some_difference++;
-				printf("block [%d, %d]: detected mse = %.20lf\n", ii, jj, sq_error[ii][jj]);
+				sum_col_diffs(BS, X[ii][jj] ?: zero_block, Y[ii][jj] ?: zero_block, colsum_diff);
+				maxdiff(BS, X[ii][jj] ?: zero_block, Y[ii][jj] ?: zero_block, &max_diff);
 			}
 
-	return some_difference;
+			if (X[ii][jj])
+				sum_cols(BS, X[ii][jj], colsum_A);
+		}
+
+		#pragma omp taskwait // on colsum.... ?
+		for (int j = 0; j < BS; j++)
+		{
+			if (colmax_diff < colsum_diff[j])
+				colmax_diff = colsum_diff[j];
+			if (colmax_A < colsum_A[j])
+				colmax_A = colsum_A[j];
+		}
+	}
+
+	free(colsum_diff);
+	free(colsum_A);
+
+	float final = colmax_diff / (colmax_A * NB * BS);
+	printf("-- ||LU-A||_inf/(||A||_inf.n.eps) = %e\n", final / FLT_EPSILON);
+
+	return isnan(final) || isinf(final) || (final > 60.0 * FLT_EPSILON);
 }
 
 
@@ -340,7 +363,7 @@ int main(int argc, char* argv[])
 	if (argc != 3)
 		errx(0, "Usage: %s num_blocks block_size", argv[0]);
 
-	int NB = atoi(argv[1]), BS = atoi(argv[2]);
+	const int NB = atoi(argv[1]), BS = atoi(argv[2]);
 	p_block_t A[NB][NB];
 	p_block_t origA[NB][NB];
 
