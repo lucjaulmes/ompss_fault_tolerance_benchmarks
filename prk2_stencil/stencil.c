@@ -196,6 +196,7 @@ int main(int argc, char **argv)
 	#endif
 
 	printf("Grid size            = %ld\n", n);
+	printf("Tile size            = %ld\n", tile_size);
 	printf("Radius of stencil    = %d\n", RADIUS);
 	printf("Number of iterations = %d\n", iterations);
 	#if STAR
@@ -226,7 +227,7 @@ int main(int argc, char **argv)
 			if (bi == 0) add += (tile_size - tile_height) * COEFX;
 			if (bj == 0) add += (tile_size - tile_width ) * COEFY;
 
-			#pragma omp task out([tile_size * tile_size]block) firstprivate(add)
+			#pragma omp task out([tile_height]block) firstprivate(add)
 			for (int ii = 0; ii < tile_height; ii++)
 				for (int jj = 0; jj < tile_width; jj++)
 					block[ii][jj] = add + COEFX * ii + COEFY * jj;
