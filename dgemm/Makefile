@@ -7,8 +7,16 @@ CPPFLAGS+=-DNDEBUG -DVALIDATE
 LDLIBS+=-lm
 
 # Get a CBLAS implementation
-ifeq ($(filter-out power,$(BSC_MACHINE)),)
+ifeq ($(BSC_MACHINE),)
 LDLIBS+=-lcblas -llapack
+endif
+
+# CTE-Power9
+ifeq ($(BSC_MACHINE),power)
+OPENBLAS_HOME=/apps/OPENBLAS/0.2.20/GCC/OPENMPI
+CPPFLAGS+=-I$(OPENBLAS_HOME)/include
+LDFLAGS+=-L$(OPENBLAS_HOME)/lib
+LDLIBS+=-lopenblas
 endif
 
 # mn

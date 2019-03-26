@@ -6,8 +6,16 @@ include ../common.mk
 LDLIBS+=-lm
 
 # some CBLAS/LAPACK is required. Setup given for a normal machine and for BSC Supercomputers using ATLAS.
-ifeq ($(filter-out power,$(BSC_MACHINE)),) # CTE-Power9 or empty
-LDLIBS+=-lcblas -llapack -lblas
+ifeq ($(BSC_MACHINE),)
+LDLIBS+=-lcblas -llapack
+endif
+
+# CTE-Power9
+ifeq ($(BSC_MACHINE),power)
+OPENBLAS_HOME=/apps/OPENBLAS/0.2.20/GCC/OPENMPI
+CPPFLAGS+=-I$(OPENBLAS_HOME)/include
+LDFLAGS+=-L$(OPENBLAS_HOME)/lib
+LDLIBS+=-lopenblas
 endif
 
 # mn
