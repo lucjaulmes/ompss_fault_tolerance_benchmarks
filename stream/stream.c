@@ -52,6 +52,7 @@
 #include <omp.h>
 #include <err.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include <catchroi.h>
 
@@ -183,9 +184,9 @@ void allocations()
 
 	for (int i = 0; i < nodes; i++)
 	{
-		a[i] = CATCHROI_INSTRUMENT(malloc)(sizeof(double[N + OFFSET]));
-		b[i] = CATCHROI_INSTRUMENT(malloc)(sizeof(double[N + OFFSET]));
-		c[i] = CATCHROI_INSTRUMENT(malloc)(sizeof(double[N + OFFSET]));
+		a[i] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), sizeof(double[N + OFFSET]));
+		b[i] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), sizeof(double[N + OFFSET]));
+		c[i] = CATCHROI_INSTRUMENT(aligned_alloc)(sysconf(_SC_PAGESIZE), sizeof(double[N + OFFSET]));
 		fprintf(stderr, "node %d: a=%p b=%p c=%p, using regular malloc\n", i, a[i], b[i], c[i]);
 
 		if (!a[i] || !b[i] || !c[i]) {
@@ -349,12 +350,12 @@ int main(int argc, char *argv[])
 
 	/* Get initial value for system clock. */
 	double total_time = mysecond();
-	start_roi();
 
 	tuned_initialization();
 
-	#pragma omp taskwait noflush
+	#pragma omp taskwait
 
+	start_roi();
 	/*   --- MAIN LOOP --- repeat test cases NTIMES times ---
 	 *   NB: use inout() dependencies to serialize the type of tasks */
 
