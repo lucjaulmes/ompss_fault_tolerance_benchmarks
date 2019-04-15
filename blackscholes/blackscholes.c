@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <math.h>
 #include <sys/time.h>
 #include <err.h>
@@ -166,7 +167,7 @@ int main(int argc, char **argv)
 		errx(1, "ERROR: Block size %d larger than number of options %d. Please reduce the block size, or use larger data size.", bsize, numOptions);
 
 	// Allocate space for data
-#define LINESIZE 64
+#define LINESIZE sysconf(_SC_PAGESIZE)
 	OptionData options =
 	{
 		.spot       = CATCHROI_INSTRUMENT(aligned_alloc)(LINESIZE, numOptions * sizeof(fptype)),
