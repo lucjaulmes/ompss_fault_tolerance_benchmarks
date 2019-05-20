@@ -189,13 +189,15 @@ double wcss(int32_t dim, int n_points, const double (*points)[dim], double (*cen
 }
 
 static inline
-void recompute_centres_from_assignments(int32_t ncentres, int32_t dim, int n_points, const double (*points)[dim], double (*centres)[dim], double (*sum_assigned_points)[dim], long *num_assigned_points, int *assignment)
+void recompute_centres_from_assignments(int32_t ncentres, int32_t dim, int n_points, const double (*points)[dim], double (*centres)[dim], double (*sum_assigned_points)[dim], long *num_assigned_points, int *assignment, int chunk_size)
 {
 	memset(centres, 0, ncentres * sizeof(centres[0]));
 	memset(num_assigned_points, 0, ncentres * sizeof(num_assigned_points[0]));
 	memset(sum_assigned_points, 0, ncentres * sizeof(num_assigned_points[0]));
+	(void)chunk_size;
 
-	#pragma omp taskloop concurrent([ncentres]num_assigned_points, [ncentres]sum_assigned_points)  num_tasks(10) // group => implicit taskwait
+	// NB: group => implicit taskwait
+	#pragma omp taskloop reduction(+: [ncentres]num_assigned_points, [ncentres]sum_assigned_points) grainsize(chunk_size)
 	for (int i = 0; i < n_points; i++)
 		assign_point(dim, points[i], assignment[i], num_assigned_points, sum_assigned_points);
 
@@ -240,11 +242,10 @@ int main(int argc, char **argv)
 		srand(seed);
 
 	// Alloc and load from file
-	int64_t p, d;
-	const double *flat_points = load_from_file(infile, &p, &d);
+	int64_t np, d;
+	const double *flat_points = load_from_file(infile, &np, &d);
 
-	const int n_points = p, dim = d, chunk_size = (n_points + nblocks - 1) / nblocks;
-	(void)chunk_size;
+	const int n_points = np, dim = d, chunk_size = (n_points + nblocks - 1) / nblocks;
 
 	// Cast points now we now dim, allocate, and initialize to all-0s, except assignment to all-1s because 0 is a valid assignment
 	const double (*points)[dim] = (double(*)[dim])flat_points;
@@ -271,7 +272,7 @@ int main(int argc, char **argv)
 
 		// Distribute points to closest centre
 		#pragma omp taskloop grainsize(chunk_size) nogroup in([ncentres]centres, points[p;chunk_size]) inout(assignment[p;chunk_size]) \
-				reduction(+:changed) concurrent([ncentres]sum_assigned_points, [ncentres]num_assigned_points)
+				reduction(+:changed, [ncentres]sum_assigned_points, [ncentres]num_assigned_points)
 		for (long p = 0; p < n_points; p++)
 			changed += assign_point_to_nearest(dim, points[p], ncentres, centres, assignment + p, num_assigned_points, sum_assigned_points);
 
@@ -303,7 +304,7 @@ int main(int argc, char **argv)
 		compare_with_file(checkfile, ncentres, dim, n_points, points, centres, assignment);
 	else
 	{
-		recompute_centres_from_assignments(ncentres, dim, n_points, points, centres, sum_assigned_points, num_assigned_points, assignment);
+		recompute_centres_from_assignments(ncentres, dim, n_points, points, centres, sum_assigned_points, num_assigned_points, assignment, chunk_size);
 		double run_wcss = wcss(dim, n_points, points, centres, assignment);
 		if (ref_wcss >= 0.)
 			printf("Verification: relative increase in wcss=%g\n", run_wcss / ref_wcss - 1);
