@@ -9,6 +9,8 @@
 #include <iomanip>
 #include <sstream>
 
+#include "catchroi.h"
+
 namespace nanos {
 
 class InstrumentationCsvTdgTrace : public Instrumentation {
@@ -191,6 +193,7 @@ public:
                 current_wd_id = 0;
 
             } else if (e_key == user_func && e_type == NANOS_BURST_START) {
+                task_started(current_wd_id);
                 std::lock_guard<std::mutex> lock_maps(maps_mutex_);
 
                 bool inserted = false;
@@ -198,6 +201,7 @@ public:
                 ensure(inserted, "same WD started twice");
 
             } else if (e_key == user_func && e_type == NANOS_BURST_END) {
+                task_ended(current_wd_id);
                 std::lock_guard<std::mutex> lock_maps(maps_mutex_);
 
                 auto start_time = wd_start_time.find(current_wd_id);
