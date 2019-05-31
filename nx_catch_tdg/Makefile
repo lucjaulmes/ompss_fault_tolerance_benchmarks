@@ -24,7 +24,11 @@ debug debug_instr:CXXFLAGS+=-O0 -g2 -fno-inline
 instr perf:CXXFLAGS+=-O3
 
 
-all:debug instr debug_instr perf
+ifeq ($(INSTRUMENTATION_DEBUG),1)
+all:debug instr perf debug_instr
+else
+all:debug instr perf
+endif
 
 # NB: directory names must match those of install for -rpath
 debug:       debug/libnanox-instrumentation-$(PLUGIN).so
@@ -48,14 +52,19 @@ clean:
 
 install: | all
 	@cp -v debug/libnanox-instrumentation-$(PLUGIN).so                 $(DESTDIR)/debug/libnanox-instrumentation-$(PLUGIN).so
-	@cp -v instrumentation/libnanox-instrumentation-$(PLUGIN).so       $(DESTDIR)/instrumentation/libnanox-instrumentation-$(PLUGIN).so
-	@cp -v instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so $(DESTDIR)/instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so
 	@cp -v performance/libnanox-instrumentation-$(PLUGIN).so           $(DESTDIR)/performance/libnanox-instrumentation-$(PLUGIN).so
+	@cp -v instrumentation/libnanox-instrumentation-$(PLUGIN).so       $(DESTDIR)/instrumentation/libnanox-instrumentation-$(PLUGIN).so
+ifeq ($(INSTRUMENTATION_DEBUG),1)
+	@cp -v instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so $(DESTDIR)/instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so
+endif
 
 uninstall:
 	@rm -vf $(DESTDIR)/debug/libnanox-instrumentation-$(PLUGIN).so
-	@rm -vf $(DESTDIR)/instrumentation/libnanox-instrumentation-$(PLUGIN).so
-	@rm -vf $(DESTDIR)/instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so
 	@rm -vf $(DESTDIR)/performance/libnanox-instrumentation-$(PLUGIN).so
+	@rm -vf $(DESTDIR)/instrumentation/libnanox-instrumentation-$(PLUGIN).so
+ifeq ($(INSTRUMENTATION_DEBUG),1)
+	@rm -vf $(DESTDIR)/instrumentation-debug/libnanox-instrumentation-$(PLUGIN).so
+endif
 
 .PHONY: all debug instr debug_instr perf dirs clean install uninstall
+
