@@ -7,7 +7,9 @@
 #include <thread>
 #include <mutex>
 #include <iomanip>
+#include <fstream>
 #include <sstream>
+#include <cstdlib>
 
 #include "catchroi.h"
 
@@ -106,11 +108,18 @@ public:
 
         ensure(wd_start_time.empty(), "Some WDs started but never finished");
 
+        const char *filename = std::getenv("NX_TDG_OUT");
+        if (!filename) {
+            return;
+        }
+
+        std::ofstream csv_out(filename);
+
         for (const auto &wd: wds) {
-            std::cerr << wd.first << ':' << wd.second.description << ':' << wd.second.duration << ':' << wd.second.deps.size();
+            csv_out << wd.first << ':' << wd.second.description << ':' << wd.second.duration << ':' << wd.second.deps.size();
             for (const auto &dep: wd.second.deps)
-                std::cerr << ':' << std::hex << (uintptr_t)dep.addr << std::dec << ':' << dep.size << ':' << dep.desc;
-            std::cerr << '\n';
+                csv_out << ':' << std::hex << (uintptr_t)dep.addr << std::dec << ':' << dep.size << ':' << dep.desc;
+            csv_out << '\n';
         }
     }
 
