@@ -24,6 +24,8 @@
 
 #include "inject_err.h"
 
+extern int roi_progress();
+
 
 enum { NONE = 0, FLIP, PUT, DUE };
 
@@ -290,6 +292,8 @@ void* inject_error(void* ignore)
 
 	// default cancellability state + nanosleep is a cancellation point
 	sleep_ns(error->time);
+	int ntasks = roi_progress();
+	printf("inject completed_roi_tasks:%d", ntasks);
 
 	int64_t *ptr = (int64_t*)error->pos;
 	if (ptr == NULL)
@@ -378,7 +382,7 @@ void inject_stop()
 			int mem_op = (sample->data_src >> PERF_MEM_OP_SHIFT) & (PERF_MEM_OP_LOAD | PERF_MEM_OP_STORE);
 
 			size_t len = strnlen(buf, sizeof(buf));
-			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%lu sample_header:%x sample_precise:%d perf_raw_mem_op:%d",
+			snprintf(buf + len, sizeof(buf) - len, " inject_samples:%llu sample_header:%x sample_precise:%d perf_raw_mem_op:%d",
 					(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t),
 					sample->header.misc, (sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, mem_op);
 #ifdef __x86_64__

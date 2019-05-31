@@ -8,6 +8,9 @@ extern "C" {
 void start_roi();
 void stop_roi(int it);
 
+// NB. the two following functions *must* be thread-safe
+void task_started(int id);
+void task_ended(int id);
 
 #define PASTE_PREFIX(a, b) a ## b
 #define CATCHROI_INSTRUMENT(f) PASTE_PREFIX(_libcatchroi_, f)

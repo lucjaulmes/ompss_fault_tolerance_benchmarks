@@ -9,9 +9,13 @@
 
 static struct timeval start_time, stop_time;
 
+static enum {BEFORE_ROI = 0, DURING_ROI = 1, AFTER_ROI = 2} when = BEFORE_ROI;
+static _Atomic int taskcount[3] = {0};
 
 void start_roi()
 {
+	when = DURING_ROI;
+
 	inject_start();
 	gettimeofday(&start_time, NULL);
 }
@@ -25,6 +29,36 @@ void stop_roi(int it)
 		printf("solve_time:%lld iterations:%d\n", time, it);
 	else
 		printf("solve_time:%lld\n", time);
+
+	when = AFTER_ROI;
+}
+
+// NB: must be thread-safe.
+void task_started(int id)
+{
+	(void)id;
+}
+
+// NB: must be thread-safe (taskcounts are atomic)
+void task_ended(int id)
+{
+	// ignore main
+	if (id > 1)
+		taskcount[when]++;
+}
+
+int roi_progress()
+{
+	return taskcount[DURING_ROI];
+}
+
+void __attribute__((destructor)) report()
+{
+	if (taskcount[BEFORE_ROI] + taskcount[DURING_ROI] + taskcount[AFTER_ROI]) {
+		printf("tasks executed before/during/after ROI: %d, %d, %d\n", taskcount[BEFORE_ROI], taskcount[DURING_ROI], taskcount[AFTER_ROI]);
+	} else {
+		printf("no tasks reported from nanox instrumentation plugin.\n");
+	}
 }
 
 // Have TaskSim automatically catch our beginning/end of ROI
