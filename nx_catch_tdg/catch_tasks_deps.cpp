@@ -3,7 +3,7 @@
 #include "system.hpp"
 #include "debug.hpp"
 
-#include <sys/time.h>
+#include <time.h>
 #include <thread>
 #include <mutex>
 #include <iomanip>
@@ -12,6 +12,7 @@
 #include <cstdlib>
 
 #include "catchroi.h"
+
 
 namespace nanos {
 
@@ -56,23 +57,24 @@ public:
     struct wd_info
     {
         std::string description;
-        int64_t duration;
+        uint64_t start, end, duration;
         std::vector<struct dep_info> deps;
     };
 
 
     const char * const dep_name[6] = {"??", "in", "out", "inout", "commutative", "concurrent"};
     std::map<uint64_t, struct wd_info> wds;
-    std::map<uint64_t, struct timeval> wd_start_time;
+    std::map<uint64_t, uint64_t> wd_start_time;
     static std::mutex maps_mutex_;
 
     static std::mutex current_wd_mutex_;
 
-    inline struct timeval getus()
+    inline uint64_t getns()
     {
-        struct timeval t;
-        gettimeofday(&t, NULL);
-        return t;
+		struct timespec get_time;
+		clock_gettime(CLOCK_MONOTONIC_RAW, &get_time);
+
+		return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
     }
 
     // low-level instrumentation interface (mandatory functions)
@@ -95,14 +97,16 @@ public:
 
     void finalize(void)
     {
-        struct timeval now = getus();
+        uint64_t now = getns();
 
         std::lock_guard<std::mutex> lock_maps(maps_mutex_);
 
         // Ensure main() is considered finished
         auto main_start_time = wd_start_time.find(1);
         if (main_start_time != wd_start_time.end()) {
-            wds.at(1).duration += (now.tv_sec - main_start_time->second.tv_sec) * 1000000 + (now.tv_usec - main_start_time->second.tv_usec);
+            struct wd_info &wd = wds.at(1);
+			wd.duration += now - main_start_time->second;
+			wd.end = now;
             wd_start_time.erase(main_start_time);
         }
 
@@ -114,9 +118,11 @@ public:
         }
 
         std::ofstream csv_out(filename);
+		csv_out << "wd:description:start:end:duration:dependencies\n";
 
         for (const auto &wd: wds) {
-            csv_out << wd.first << ':' << wd.second.description << ':' << wd.second.duration << ':' << wd.second.deps.size();
+            csv_out << wd.first << ':' << wd.second.description << ':' << wd.second.start << ':' << wd.second.end
+					<< ':' << wd.second.duration << ':' << wd.second.deps.size();
             for (const auto &dep: wd.second.deps)
                 csv_out << ':' << std::hex << (uintptr_t)dep.addr << std::dec << ':' << dep.size << ':' << dep.desc;
             csv_out << '\n';
@@ -128,7 +134,7 @@ public:
 
     void addResumeTask(WorkDescriptor& w)
     {
-        struct timeval timestamp = getus();
+        uint64_t timestamp = getns();
 
         std::lock_guard<std::mutex> lock_maps(maps_mutex_);
         bool inserted = false;
@@ -138,14 +144,16 @@ public:
 
     void addSuspendTask(WorkDescriptor& w, bool last)
     {
-        struct timeval now = getus();
+        uint64_t now = getns();
         uint64_t wd_id = w.getId();
 
         std::lock_guard<std::mutex> lock_maps(maps_mutex_);
         auto start_time = wd_start_time.find(wd_id);
         ensure(start_time != wd_start_time.end(), "WD suspended without first having started");
 
-        wds.at(wd_id).duration += (now.tv_sec - start_time->second.tv_sec) * 1000000 + (now.tv_usec - start_time->second.tv_usec);
+        struct wd_info &wd = wds.at(wd_id);
+		wd.duration += now - start_time->second;
+		wd.end = now;
         wd_start_time.erase(start_time);
     }
 
@@ -161,7 +169,7 @@ public:
 
         // Get the node corresponding to the wd_id calling this function
         // This node won't exist if the calling wd corresponds to that of the master thread
-        struct timeval timestamp = getus();
+        uint64_t timestamp = getns();
         static __thread int64_t current_wd_id = 0;
 
         for (Event* e = events; e != events + count; e++) {
@@ -209,6 +217,11 @@ public:
                 std::tie(std::ignore, inserted) = wd_start_time.insert(std::make_pair(current_wd_id, timestamp));
                 ensure(inserted, "same WD started twice");
 
+				struct wd_info &wd = wds.at(current_wd_id);
+				if (!wd.duration) {
+					wd.start = timestamp;
+				}
+
             } else if (e_key == user_func && e_type == NANOS_BURST_END) {
                 task_ended(current_wd_id);
                 std::lock_guard<std::mutex> lock_maps(maps_mutex_);
@@ -216,8 +229,10 @@ public:
                 auto start_time = wd_start_time.find(current_wd_id);
                 ensure(start_time != wd_start_time.end(), "WD stopped without first having started");
 
-                wds.at(start_time->first).duration += (timestamp.tv_sec - start_time->second.tv_sec) * 1000000
-                                                    + (timestamp.tv_usec - start_time->second.tv_usec);
+				struct wd_info &wd = wds.at(start_time->first);
+
+                wd.duration += timestamp - start_time->second;
+				wd.end = timestamp;
                 wd_start_time.erase(start_time);
             }
         }
