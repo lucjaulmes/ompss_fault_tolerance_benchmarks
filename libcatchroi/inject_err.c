@@ -98,7 +98,7 @@ typedef struct _sample {
 	uint32_t pid, tid;
 	uint64_t time, addr;
 	uint32_t cpu, _reserved;
-	uint64_t data_src;
+	union perf_mem_data_src data_src;
 	uint64_t abi, regs[NREGS];
 } sample_t;
 
@@ -357,7 +357,7 @@ void* inject_error(void* ignore)
 		error->mask = get;
 	}
 	else if (error->type == DUE)
-		ioctl(error->perf_fd, PERF_EVENT_IOC_REFRESH, 1);
+		ioctl(error->perf_fd, PERF_EVENT_IOC_ENABLE, 1); // use PERF_EVENT_IOC_REFRESH for just 1 event
 	else if (error->type != NONE)
 		err(-1, "Unrecognised error type");
 
@@ -430,6 +430,7 @@ void inject_stop()
 
 	if (error->type == DUE)
 	{
+		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
 		printf(" inject_samples:%lu", (size_t)(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t));
 
 #ifdef __x86_64__
@@ -469,10 +470,8 @@ void inject_stop()
 				printf(" sample_address:%#016lx", sample->addr);
 			}
 
-			if (sample->data_src) { // would be helpful but is usually just 0
-				int mem_op  = (sample->data_src >> PERF_MEM_OP_SHIFT);
-				int mem_lvl = (sample->data_src >> PERF_MEM_LVL_SHIFT);
-				printf(" sample_datasrc:%lx sample_datasrc_memop:%x sample_datasrc_memlvl:%x", sample->data_src, mem_op, mem_lvl);
+			if (sample->data_src.mem_op != PERF_MEM_OP_NA || sample->data_src.mem_lvl != PERF_MEM_LVL_NA) {
+				printf(" sample_datasrc_memop:%x sample_datasrc_memlvl:%x", sample->data_src.mem_op, sample->data_src.mem_lvl);
 			}
 
 			if (sample->abi != PERF_SAMPLE_REGS_ABI_64) {
