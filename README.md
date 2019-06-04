@@ -9,11 +9,16 @@ Each directory provides build targets `perf`, `instr`, `debug`, `seq`, `install`
 The first three are parallel builds, respectively built with and linked against the `performance`, `instrumentation`, and `debug` libraries of the Nanox++ runtime. `seq` builds a sequential binary.
 All builds require a built `libcatchroi` at `$CATCHROI_HOME` (defaults to `<repo_root>/libcatchroi`). `install` and `uninstall` targets respect the `$DESTDIR` variable.
 
+This repository contains two libraries:
+- [`libcatchroi`](libcatchroi/README.md), that provides timing information and some error injection capabilities.
+	The library format is useful to interpose the Region Of Interest (ROI) start and end calls, as well as any desired memory allocation calls.
+- [`nx_catch_tdg`](nx_catch_tdg/README.md), which is a nanox instrumentation plugin to report scheduling information.
+
+The rest of the subdirectories are benchmarks.
 
 #### Benchmarks used for evaluation
 
-There is a library, `libcatchroi`, that provides timing information, which is useful to interpose the Region Of Interest (ROI) start and end calls.
-It also provides some error injection capabilities. The rest of the subdirectories are benchmarks, listed below.
+The table below lists all the benchmarks in this repository.
 The "Verif." column indicates how the benchmark's output verification is performed.
 
 Name		 | Benchmark description					| Category						| Verif    | Origin |
