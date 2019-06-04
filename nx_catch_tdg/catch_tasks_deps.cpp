@@ -11,7 +11,9 @@
 #include <sstream>
 #include <cstdlib>
 
+#ifndef NOCATCHROI
 #include "catchroi.h"
+#endif
 
 
 namespace nanos {
@@ -210,7 +212,9 @@ public:
                 current_wd_id = 0;
 
             } else if (e_key == user_func && e_type == NANOS_BURST_START) {
+#ifndef NOCATCHROI
                 task_started(current_wd_id);
+#endif
                 std::lock_guard<std::mutex> lock_maps(maps_mutex_);
 
                 bool inserted = false;
@@ -223,7 +227,9 @@ public:
 				}
 
             } else if (e_key == user_func && e_type == NANOS_BURST_END) {
+#ifndef NOCATCHROI
                 task_ended(current_wd_id);
+#endif
                 std::lock_guard<std::mutex> lock_maps(maps_mutex_);
 
                 auto start_time = wd_start_time.find(current_wd_id);

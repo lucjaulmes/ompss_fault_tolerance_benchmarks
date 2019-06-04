@@ -3,18 +3,24 @@ NANOX_SRC=/usr/src/pm.bsc.es/nanox
 # nanox install dir, with no trailing space
 DESTDIR=/usr/local/lib64
 
-CATCHROI_HOME ?= $(dir $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))libcatchroi
-
 CXX=g++
 
 CPPFLAGS=-I$(NANOX_SRC)/src/plugins -I$(NANOX_SRC) -I$(NANOX_SRC)/src/arch/unix-os -I$(NANOX_SRC)/src/arch/cluster \
 		 -I$(NANOX_SRC)/src/arch/common -I$(NANOX_SRC)/src/arch/gpu -I$(NANOX_SRC)/src/arch/fpga -I$(NANOX_SRC)/src/arch/opencl \
 		 -I$(NANOX_SRC)/src/arch/smp -I$(NANOX_SRC)/src/arch/spu -I$(NANOX_SRC)/src/core -I$(NANOX_SRC)/src/support \
-		 -I$(CATCHROI_HOME)/include -D_NANOS_INTERNAL -DLIBDIR='$(DESTDIR)' -include "new_decl.hpp" -DPIC
+		 -D_NANOS_INTERNAL -DLIBDIR='$(DESTDIR)' -include "new_decl.hpp" -DPIC
+
+ifeq ($(NOCATCHROI),)
+CATCHROI_HOME ?= $(dir $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))libcatchroi
+CPPFLAGS+=-I$(CATCHROI_HOME)/include
+LDFLAGS+=-L$(CATCHROI_HOME)/lib -Wl,-rpath,$(CATCHROI_HOME)/lib
+else
+CPPFLAGS+=-DNOCATCHROI
+endif
 
 CXXFLAGS=-Wall -Wextra -Wshadow -Wmissing-declarations -Wno-unused-parameter -Wno-missing-field-initializers -Werror -std=c++11 -fPIC
 
-LDFLAGS=-shared -Wl,-soname,libnanox-instrumentation-$(PLUGIN).so -L$(CATCHROI_HOME)/lib -Wl,-rpath,$(CATCHROI_HOME)/lib
+LDFLAGS=-shared -Wl,-soname,libnanox-instrumentation-$(PLUGIN).so
 LDLIBS=-pthread
 
 debug debug_instr:CPPFLAGS+=-DNANOS_DEBUG_ENABLED
