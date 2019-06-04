@@ -255,7 +255,7 @@ void inject_parse_env()
 				inject.page   = strtoll(optarg, NULL, 0);
 				break;
 			case 'm':
-				inject.inject_time   = strtoull(optarg, NULL, 0) * (double)rand() / RAND_MAX;
+				inject.inject_time   = strtod(optarg, NULL) * rand() / (double)RAND_MAX;
 				break;
 			case 's':
 				seed          = atoi(optarg);
@@ -340,7 +340,7 @@ rdtsc()
 
 void* inject_error(void* ignore)
 {
-	err_t *error = ignore;
+	(void)ignore;
 
 	// default cancellability state + nanosleep is a cancellation point
 	sleep_ns(error->inject_time);
@@ -410,6 +410,7 @@ void inject_stop()
 		return;
 
 	error->end_time = getns();
+	pthread_join(error->injector_thread, NULL);
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
 	char buf[1024];
@@ -418,8 +419,6 @@ void inject_stop()
 
 	safe_sprintf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_time:%lu",
 				error->inj, error->end_time - error->start_time, error->tasks_finished, error->real_inject_time - error->start_time);
-
-	pthread_join(error->injector_thread, NULL);
 
 	if (error->inj > 0 && error->undo)
 	{
@@ -450,10 +449,11 @@ void inject_stop()
 
 		const intptr_t evt_start = (intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_tail;
 		const intptr_t evt_end   = (intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_head;
-		sample_t *sample = NULL;
-		for (intptr_t evtptr = evt_start; evtptr != evt_end; evtptr += sample->header.size)
+		for (intptr_t evtptr = evt_start, sample_size = sizeof(struct perf_event_header); evtptr != evt_end; evtptr += sample_size)
 		{
 			sample_t *sample = (sample_t*)evtptr;
+			sample_size = sample->header.size;
+
 			if (sample->header.type != PERF_RECORD_SAMPLE || sample->header.size != sizeof(*sample))
 			{
 				warnx("Unexpected sample metadata: type=%u size=%u", sample->header.type, sample->header.size);
@@ -486,7 +486,7 @@ void inject_stop()
 			}
 
 			// print all the registers
-			for (size_t reg = 0; reg < sizeof(reg_names); reg++)
+			for (size_t reg = 0; reg < NREGS; reg++)
 				if (REGS & (1 << reg))
 					printf(" sample_%s:%016lx", reg_names[reg], sample->regs[reg]);
 
