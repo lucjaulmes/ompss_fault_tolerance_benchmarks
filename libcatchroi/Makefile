@@ -15,9 +15,11 @@ DESTDIR?=$(CATCHROI_HOME)
 INJECT=1
 ifeq ($(INJECT),1)
 INJECT_OBJ=inject_err.o
+XED=1
 else
 INJECT_OBJ=
 CPPFLAGS+=-DDISABLE_ERROR_INJECTION
+XED=0
 endif
 
 lib%.a:%.o $(INJECT_OBJ)
@@ -41,10 +43,10 @@ uninstall:
 .PHONY: make clean install uninstall
 
 
-ifeq ($(INJECT)@$(shell uname -p),1@x86_64)
+ifeq ($(XED)@$(shell uname -p),1@x86_64)
 XED_PATH?=$(HOME)/.local
 
-CPPFLAGS+=-I$(XED_PATH)/include
-LDFLAGS+=-L$(XED_PATH)/lib
+CPPFLAGS+=-I$(XED_PATH)/include -DHAVE_XED
+LDFLAGS+=-L$(XED_PATH)/lib -Wl,-rpath,$(XED_PATH)/lib
 LDLIBS+=-lxed
 endif

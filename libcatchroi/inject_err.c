@@ -31,7 +31,9 @@ static inline uint64_t getns()
 
 
 #ifdef __x86_64__
-#include "xed/xed-interface.h"
+# ifdef HAVE_XED
+#  include "xed/xed-interface.h"
+# endif
 
 const char * const reg_names[] = {
 	"AX", "BX", "CX", "DX",
@@ -436,12 +438,14 @@ void inject_stop()
 		safe_sprintf(" inject_samples:%lu", (size_t)(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t));
 
 #ifdef __x86_64__
+# ifdef HAVE_XED
 		// Use XED to decode instructions, in particular find out if it was reading or writing
 		xed_tables_init();
 
 		xed_decoded_inst_t xedd = {0};
 		xed_decoded_inst_zero(&xedd);
 		xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
+# endif
 #endif
 
 		const intptr_t evt_start = (intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_tail;
@@ -488,6 +492,7 @@ void inject_stop()
 
 			// finally decode
 #ifdef __x86_64__
+# ifdef HAVE_XED
 			if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
 				safe_sprintf("xed_decode failed");
 
@@ -505,6 +510,10 @@ void inject_stop()
 						m, xed_decoded_inst_mem_written_only(&xedd, 0));
 				}
 			}
+# else
+			safe_sprintf("no instruction decoder");
+# endif
+
 #else
 # ifdef __powerpc64__
 			uint32_t *instr = (uint32_t*)sample->ip;
