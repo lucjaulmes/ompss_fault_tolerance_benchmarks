@@ -413,11 +413,7 @@ void inject_stop()
 	pthread_join(error->injector_thread, NULL);
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
-	char buf[1024];
-	size_t len = 0;
-	#define safe_sprintf(...) do { len += snprintf(buf + len, sizeof(buf) - len, __VA_ARGS__); } while(0)
-
-	safe_sprintf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_time:%lu",
+	printf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_time:%lu",
 				error->inj, error->end_time - error->start_time, error->tasks_finished, error->real_inject_time - error->start_time);
 
 	if (error->inj > 0 && error->undo)
@@ -434,7 +430,7 @@ void inject_stop()
 
 	if (error->type == DUE)
 	{
-		safe_sprintf(" inject_samples:%lu", (size_t)(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t));
+		printf(" inject_samples:%lu", (size_t)(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t));
 
 #ifdef __x86_64__
 # ifdef HAVE_XED
@@ -461,28 +457,26 @@ void inject_stop()
 			}
 
 			// print sample data
-			len = 0;
-			printf("%s\n", buf);
-			safe_sprintf("sample_precise:%d sample_pc:%#016lx sample_time:%lu",
+			printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu",
 					(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time);
 
 			// only print sample meta-data if it does not fit with the expected vluaes
 			if ((sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) {
-				safe_sprintf(" sample_cpu_mode:%d", sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK);
+				printf(" sample_cpu_mode:%d", sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK);
 			}
 
 			if (sample->addr != (uintptr_t)error->pos) {
-				safe_sprintf(" sample_address:%#016lx", sample->addr);
+				printf(" sample_address:%#016lx", sample->addr);
 			}
 
 			if (sample->data_src) { // would be helpful but is usually just 0
 				int mem_op  = (sample->data_src >> PERF_MEM_OP_SHIFT);
 				int mem_lvl = (sample->data_src >> PERF_MEM_LVL_SHIFT);
-				safe_sprintf(" sample_datasrc_memop:%x sample_datasrc_memlvl:%x", mem_op, mem_lvl);
+				printf(" sample_datasrc:%lx sample_datasrc_memop:%x sample_datasrc_memlvl:%x", sample->data_src, mem_op, mem_lvl);
 			}
 
 			if (sample->abi != PERF_SAMPLE_REGS_ABI_64) {
-				safe_sprintf(" sample_regs_abi:%s", sample->abi ? "32b" : "none");
+				printf(" sample_regs_abi:%s", sample->abi ? "32b" : "none");
 			}
 
 			// print all the registers
@@ -494,24 +488,23 @@ void inject_stop()
 #ifdef __x86_64__
 # ifdef HAVE_XED
 			if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
-				safe_sprintf("xed_decode failed");
+				printf(" xed_decode failed");
 
 			else
 			{
 				size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
-				safe_sprintf(" sample_memops:%lu", memops);
+				printf(" sample_memops:%lu", memops);
 
 				for (unsigned m = 0; m < memops; m++)
 				{
-					len = strnlen(buf, sizeof(buf));
-					safe_sprintf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
+					printf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
 						m, xed_decoded_inst_mem_read(&xedd, 0),
 						m, xed_decoded_inst_mem_written(&xedd, 0),
 						m, xed_decoded_inst_mem_written_only(&xedd, 0));
 				}
 			}
 # else
-			safe_sprintf("no instruction decoder");
+			printf(" no instruction decoder");
 # endif
 
 #else
@@ -522,7 +515,7 @@ void inject_stop()
 			uint32_t st = (primary_opcode & 0x24U) == 0x24U;
 			uint32_t ld = (primary_opcode & 0x24U) == 0x20U;
 
-			safe_sprintf("sample_addr:%p sample_instr:%x primary_opcode:%d memop_read:%u memop_write:%u",
+			printf("sample_addr:%p sample_instr:%x primary_opcode:%d memop_read:%u memop_write:%u",
 						(void*)instr, *instr, primary_opcode, ld, st);
 # else
 #  error "Architecture not implemented for decoding instructions"
@@ -533,8 +526,7 @@ void inject_stop()
 		munmap(error->event_map, error->event_map->data_offset + error->event_map->data_size);
 		close(error->perf_fd);
 	}
-
-	printf("%s\n", buf);
+	printf("\n");
 
 	free(error);
 	fflush(stdout);
