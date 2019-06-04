@@ -9,6 +9,9 @@
 #include <errno.h>
 #include <time.h>
 
+#define OPTPARSE_IMPLEMENTATION
+#include "optparse.h"
+
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -106,24 +109,6 @@ typedef struct _sample {
 static err_t *error = NULL;
 
 
-char *token(char **next)
-{
-	char *ret = NULL;
-
-	for (; **next; (*next)++)
-		if (ret == NULL && !isspace(**next))
-			ret = *next;
-		else if (ret != NULL && isspace(**next))
-		{
-			**next = '\0';
-			(*next)++;
-			break;
-		}
-
-	return ret;
-}
-
-
 static inline int64_t pick_bits(const int n_bits)
 {
 	int64_t flip_bits = 0LL;
@@ -154,24 +139,6 @@ static inline int64_t pick_bits(const int n_bits)
 
 void inject_parse_env()
 {
-#define required_argument 1
-#define no_argument 0
-	static struct
-	{
-		const char *name;
-		int has_arg, *flag, val;
-	} long_options[] =
-	{
-		{"n_bits",  required_argument, NULL, 'n'},
-		{"vector",  required_argument, NULL, 'v'},
-		{"page",    required_argument, NULL, 'a'},
-		{"mtbf",    required_argument, NULL, 'm'},
-		{"seed",    required_argument, NULL, 's'},
-		{"put",     required_argument, NULL, 'p'},
-		{"due",     no_argument,	   NULL, 'd'},
-		{"undo",    no_argument,       NULL, 'u'},
-	};
-
 	char *argstr = getenv("INJECT");
 
 	if (argstr == NULL)
@@ -180,98 +147,62 @@ void inject_parse_env()
 	int seed = 0;
 	err_t inject = {.pos = NULL, .type = NONE, .inject_time = 0, .page = -1, .region = -1, .inj = 0};
 
-	// Home-made option parsing, like getopts except don't call on it, since it interferes with calling it from main.
-	for (char *optarg = NULL, *optnext = argstr, *optstr = token(&optnext); optstr != NULL; optstr = token(&optnext), optarg = NULL)
-	{
-		int optlen = strlen(optstr);
-		int tok_opts[optlen - 1], n_tok_opts = 0;
-
-		// Parse a single long option
-		if (optlen > 2 && optstr[0] == '-' && optstr[1] == '-')
-		{
-			for (size_t lo = 0; lo < sizeof(long_options) / sizeof(*long_options); lo++)
-				if (strcmp(optstr + 2, long_options[lo].name) == 0)
-				{
-					*tok_opts = long_options[lo].val;
-					n_tok_opts = 1;
-
-					if (long_options[lo].has_arg == required_argument)
-						// --long <val>
-						optarg = token(&optnext);
-
-						// TODO: --long=<val>
-
-					break;
-				}
-		}
-		// Parse a short option(s)
-		else if (optlen > 1 && optstr[0] == '-' && optstr[1] != '-')
-			// loop on optstr chars, each is (potentially) a short option
-			for (n_tok_opts = 0; n_tok_opts < optlen - 1; )
-			{
-				tok_opts[n_tok_opts] = 0;
-				for (size_t lo = 0; lo < sizeof(long_options) / sizeof(*long_options); lo++)
-					if ((int)optstr[1 + n_tok_opts] == long_options[lo].val)
-					{
-						tok_opts[n_tok_opts] = long_options[lo].val;
-						if (long_options[lo].has_arg == required_argument)
-						{
-							// -o<val>
-							if (optlen > n_tok_opts + 2)
-								optarg = optstr + n_tok_opts + 2;
-							// -o <val>
-							else
-								optarg = token(&optnext);
-							// stop loop on short options
-							optlen = n_tok_opts;
-						}
-						break;
-					}
-
-				// unrecognized option => break
-				if (!tok_opts[n_tok_opts])
-					break;
-				else
-					n_tok_opts++;
-			}
-		// unrecognized option or '--': break out of here
-		else
+	// tokenize arguments
+	char *argv[128] = {NULL}, *strtok_ctx = NULL;
+	argv[0] = strtok_r(argstr, " \t\n\v\f\r", &strtok_ctx);
+	for (int i = 1; i < 127; i++)
+		if ((argv[i] = strtok_r(NULL, " \t\n\v\f\r", &strtok_ctx)) == NULL)
 			break;
 
-		for (int opt_n = 0, opt = tok_opts[opt_n]; opt_n < n_tok_opts; opt = tok_opts[++opt_n])
+	// Standalone option parsing from optparse, because getopt it interferes with programs calling it from main.
+	struct optparse_long long_options[] =
+	{
+		{"n_bits",  'n', OPTPARSE_REQUIRED},
+		{"vector",  'v', OPTPARSE_REQUIRED},
+		{"page",    'a', OPTPARSE_REQUIRED},
+		{"mtbf",    'm', OPTPARSE_REQUIRED},
+		{"seed",    's', OPTPARSE_REQUIRED},
+		{"put",     'p', OPTPARSE_REQUIRED},
+		{"due",     'd', OPTPARSE_NONE},
+		{"undo",    'u', OPTPARSE_NONE},
+	};
+
+	struct optparse options;
+	optparse_init(&options, argv);
+
+	for (int read_all_options = 0; !read_all_options; )
+		// NB. options n and p should be mutually exclusive
+		switch (optparse_long(&options, long_options, NULL))
 		{
-			// the usual switch() just as if we called opt = getopt(...), even sets optarg.
-			// NB. options n and p should be mutually exclusive
-			switch (opt)
-			{
-			case 'n':
-				inject.type   = FLIP;
-				inject.n_bits = atoi(optarg);
-				break;
-			case 'v':
-				inject.region = atoi(optarg);
-				break;
-			case 'a':
-				inject.page   = strtoll(optarg, NULL, 0);
-				break;
-			case 'm':
-				inject.inject_time   = strtod(optarg, NULL) * rand() / (double)RAND_MAX;
-				break;
-			case 's':
-				seed          = atoi(optarg);
-				break;
-			case 'u':
-				inject.undo   = 1;
-				break;
-			case 'p':
-				inject.type   = PUT;
-				inject.mask   = strtoll(optarg, NULL, 0);
-				break;
-			case 'd':
-				inject.type   = DUE;
-			}
+		case 'n':
+			inject.type        = FLIP;
+			inject.n_bits      = atoi(options.optarg);
+			break;
+		case 'v':
+			inject.region      = atoi(options.optarg);
+			break;
+		case 'a':
+			inject.page        = strtoll(options.optarg, NULL, 0);
+			break;
+		case 'm':
+			inject.inject_time = strtod(options.optarg, NULL) * rand() / (double)RAND_MAX;
+			break;
+		case 's':
+			seed               = atoi(options.optarg);
+			break;
+		case 'u':
+			inject.undo        = 1;
+			break;
+		case 'p':
+			inject.type        = PUT;
+			inject.mask        = strtoll(options.optarg, NULL, 0);
+			break;
+		case 'd':
+			inject.type        = DUE;
+			break;
+		case -1:
+			read_all_options   = 1;
 		}
-	}
 
 	if (inject.type == NONE)
 		return;

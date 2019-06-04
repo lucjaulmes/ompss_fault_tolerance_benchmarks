@@ -1,4 +1,4 @@
-# Library to let benchmarks' region of intereset be easily instrumented
+# Library to allow benchmarks' region of interest be easily instrumented
 
 This library offers three main functionalities:
 
@@ -13,3 +13,23 @@ This library offers three main functionalities:
 	- or instrumenting all calls in a file simply by including `catchroi.h` with `CATCHROI_OVERRIDE_NAMES` defined.
 
 3. Some error injection mechanisms, optionally compiled, and controlled through the `INJECT` environment variable.
+	Options for injection errors are:
+	- Type of error (mutually exclusive):
+		- `-n`, `--n_bits=BITS`	Flip BITS number of bits at the targeted address.
+		- `-p`, `--put=VALUE`	Insert VALUE at the targeted address (e.g. 7ff8000000000000 for a double NaN).
+		- `-d`, `--due`			Simulate a DUE by recording the following access(es) to the targeted address.
+
+	- Error target (mutually exclusive):
+		- `-v`, `--vector=VECT`	Target the VECT instrumented allocation.
+		- `-a`, `--page=PAGE`	Target the PAGE of instrumented allocations.
+
+		For example, with two 2-page allocations that are instrumented by `libcatchroi`,
+		`-v1`, `-a2` and `-a3` all target the second allocation.
+
+	- Remaining options:
+		- `-m`, `--mtbf=TIME`	Inject with a TIME mean time between errors.
+		- `-s`, `--seed=SEED`	Initialize rng with SEED.
+		- `-u`, `--undo`		Undo the error injection (flip back bits or restore value before inserting VALUE).
+
+	The option parsing is done by optparse (from https://github.com/skeeto/optparse)
+
