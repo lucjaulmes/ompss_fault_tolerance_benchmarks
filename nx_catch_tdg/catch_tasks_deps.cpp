@@ -69,8 +69,6 @@ public:
     std::map<uint64_t, uint64_t> wd_start_time;
     static std::mutex maps_mutex_;
 
-    static std::mutex current_wd_mutex_;
-
     inline uint64_t getns()
     {
 		struct timespec get_time;
@@ -270,7 +268,6 @@ namespace ext {
 
 #ifdef NANOS_INSTRUMENTATION_ENABLED
 std::mutex InstrumentationCsvTdgTrace::maps_mutex_;
-//std::mutex InstrumentationCsvTdgTrace::current_wd_mutex_;
 #endif
 
 } // namespace nanos
