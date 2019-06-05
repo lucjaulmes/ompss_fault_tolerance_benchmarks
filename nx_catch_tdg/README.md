@@ -16,5 +16,6 @@ To use:
 	- either in the nanox lib/instrumentation/ directory (with `make install` and `DESTDIR` set)
 	- or somewhere in your `LD_LIBRARY_PATH`
 
-3. Run with `NX_INSTRUMENTATION=catch_tasks_deps NX_TDG_OUT=/dev/stdout <instrumentation_binary> <args>`.  
-	This will output the TDG in csv format to standard output, any file name can be used instead. Omitting NX_TDG_OUT hides the tdg output.
+3. Run with `NX_INSTRUMENTATION=catch_tasks_deps NX_TDG_OUT=/dev/stdout <instrumentation_binary> <args>`.
+	This will output the TDG in csv format to standard output, any file name can be used instead.
+	Omitting NX_TDG_OUT hides the tdg output and using `-` redirects the output to standard output.

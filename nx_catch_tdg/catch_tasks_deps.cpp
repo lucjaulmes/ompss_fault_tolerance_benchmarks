@@ -117,7 +117,15 @@ public:
             return;
         }
 
-        std::ofstream csv_out(filename);
+        std::streambuf *buf = std::cout.rdbuf();
+
+        std::ofstream file;
+        if(std::string("-").compare(filename)) {
+            file.open(filename);
+            buf = file.rdbuf();
+        }
+
+        std::ostream csv_out(buf);
 		csv_out << "wd:description:start:end:duration:dependencies\n";
 
         for (const auto &wd: wds) {
