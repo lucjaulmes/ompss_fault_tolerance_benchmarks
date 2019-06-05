@@ -169,6 +169,7 @@ void inject_parse_env()
 
 	struct optparse options;
 	optparse_init(&options, argv);
+    options.optind = 0; // no program name in argv0
 
 	for (int read_all_options = 0; !read_all_options; )
 		// NB. options n and p should be mutually exclusive
@@ -185,7 +186,7 @@ void inject_parse_env()
 			inject.page        = strtoll(options.optarg, NULL, 0);
 			break;
 		case 'm':
-			inject.inject_time = strtod(options.optarg, NULL) * rand() / (double)RAND_MAX;
+			inject.inject_time = strtoull(options.optarg, NULL, 0);
 			break;
 		case 's':
 			seed               = atoi(options.optarg);
@@ -206,11 +207,13 @@ void inject_parse_env()
 
 	if (inject.type == NONE)
 		return;
-	else if (inject.page < 0 && inject.region < 0)
+	else if ((inject.page < 0 && inject.region < 0) || inject.inject_time == 0)
 		err(1, "Wrong parameters");
 
 	// seed == 0 to get a different seed every time
 	srand(seed ? seed : (int)getns());
+
+	inject.inject_time = llround(inject.inject_time * ((double)rand() / (double)RAND_MAX));
 
 	if (inject.type == FLIP)
 		inject.mask = pick_bits(inject.n_bits);
@@ -410,9 +413,10 @@ void inject_stop()
 			}
 
 			// print all the registers
+			printf(" sample_regs");
 			for (size_t reg = 0; reg < NREGS; reg++)
 				if (REGS & (1 << reg))
-					printf(" sample_%s:%016lx", reg_names[reg], sample->regs[reg]);
+					printf(":%s=%016lx", reg_names[reg], sample->regs[reg]);
 
 			// finally decode
 #ifdef __x86_64__
