@@ -71,10 +71,10 @@ public:
 
     inline uint64_t getns()
     {
-		struct timespec get_time;
-		clock_gettime(CLOCK_MONOTONIC_RAW, &get_time);
+        struct timespec get_time;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &get_time);
 
-		return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
+        return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
     }
 
     // low-level instrumentation interface (mandatory functions)
@@ -105,8 +105,8 @@ public:
         auto main_start_time = wd_start_time.find(1);
         if (main_start_time != wd_start_time.end()) {
             struct wd_info &wd = wds.at(1);
-			wd.duration += now - main_start_time->second;
-			wd.end = now;
+            wd.duration += now - main_start_time->second;
+            wd.end = now;
             wd_start_time.erase(main_start_time);
         }
 
@@ -126,11 +126,11 @@ public:
         }
 
         std::ostream csv_out(buf);
-		csv_out << "wd:description:start:end:duration:dependencies\n";
+        csv_out << "wd:description:start:end:duration:dependencies\n";
 
         for (const auto &wd: wds) {
             csv_out << wd.first << ':' << wd.second.description << ':' << wd.second.start << ':' << wd.second.end
-					<< ':' << wd.second.duration << ':' << wd.second.deps.size();
+                    << ':' << wd.second.duration << ':' << wd.second.deps.size();
             for (const auto &dep: wd.second.deps)
                 csv_out << ':' << std::hex << (uintptr_t)dep.addr << std::dec << ':' << dep.size << ':' << dep.desc;
             csv_out << '\n';
@@ -160,8 +160,8 @@ public:
         ensure(start_time != wd_start_time.end(), "WD suspended without first having started");
 
         struct wd_info &wd = wds.at(wd_id);
-		wd.duration += now - start_time->second;
-		wd.end = now;
+        wd.duration += now - start_time->second;
+        wd.end = now;
         wd_start_time.erase(start_time);
     }
 
@@ -227,10 +227,10 @@ public:
                 std::tie(std::ignore, inserted) = wd_start_time.insert(std::make_pair(current_wd_id, timestamp));
                 ensure(inserted, "same WD started twice");
 
-				struct wd_info &wd = wds.at(current_wd_id);
-				if (!wd.duration) {
-					wd.start = timestamp;
-				}
+                struct wd_info &wd = wds.at(current_wd_id);
+                if (!wd.duration) {
+                    wd.start = timestamp;
+                }
 
             } else if (e_key == user_func && e_type == NANOS_BURST_END) {
 #ifndef NOCATCHROI
@@ -241,10 +241,10 @@ public:
                 auto start_time = wd_start_time.find(current_wd_id);
                 ensure(start_time != wd_start_time.end(), "WD stopped without first having started");
 
-				struct wd_info &wd = wds.at(start_time->first);
+                struct wd_info &wd = wds.at(start_time->first);
 
                 wd.duration += timestamp - start_time->second;
-				wd.end = timestamp;
+                wd.end = timestamp;
                 wd_start_time.erase(start_time);
             }
         }
