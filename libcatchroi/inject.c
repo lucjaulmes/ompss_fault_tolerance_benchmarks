@@ -30,6 +30,7 @@
 #include <linux/hw_breakpoint.h>
 
 
+int mmap_size = 2 * 4096;
 const int clockid = CLOCK_MONOTONIC_RAW;
 
 static inline uint64_t getns()
@@ -99,11 +100,11 @@ typedef struct _err
 	char type, undo, early;
 	_Atomic int inj;
 	struct perf_event_attr pe;
-	struct perf_event_mmap_page *event_map;
 	pthread_t injector_thread;
 } err_t;
 
-__thread int perf_fd;
+__thread int perf_fd = 0;
+__thread struct perf_event_mmap_page *event_map = NULL;
 
 
 typedef struct _sample {
@@ -118,6 +119,8 @@ typedef struct _sample {
 
 
 static err_t *error = NULL;
+
+pthread_t threads[1024], *next_thread = threads + 0;
 
 
 static inline int64_t pick_bits(const int n_bits)
@@ -230,15 +233,16 @@ void inject_parse_env()
 		inject.mask = pick_bits(inject.n_bits);
 
 	error = memcpy(malloc(sizeof(err_t)), &inject, sizeof(err_t));
-	register_mem_region_callback(register_target_region);
+	register_mem_region_callback(potential_target_region);
 
 	if (inject.type == DUE)
 	{
-		struct sigaction alarm = (struct sigaction){.sa_handler = setup_child_perfs, .sa_flags = 0};
+		struct sigaction alarm = (struct sigaction){.sa_sigaction = handle_child_perfs, .sa_flags = SA_SIGINFO};
 		sigemptyset(&alarm.sa_mask);
 		sigaddset(&alarm.sa_mask, SIGALRM);
 		if (sigaction(SIGALRM, &alarm, NULL) != 0)
 			err(-1, "cannot setup SIGALRM handler");
+		mmap_size = 2 * sysconf(_SC_PAGESIZE);
 	}
 }
 
@@ -309,14 +313,29 @@ void* inject_error(void* ignore)
 }
 
 
-void setup_child_perfs(int __attribute__((unused)) signo)
+void handle_child_perfs(int __attribute__((unused)) signo, siginfo_t *siginfo, void __attribute__((unused)) *ctx)
 {
-	perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, error->perf_fd, PERF_FLAG_FD_OUTPUT);
-	if (perf_fd < 0)
-		err(1, "failed opening child watchpoint");
-	struct perf_event_mmap_page *event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
-	if (MAP_FAILED == event_map)
-		err(1, "failed opening child watchpoint's mmap");
+	if (!perf_fd)
+	{
+		perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, error->perf_fd, 0);
+		if (perf_fd < 0)
+			err(1, "failed opening child watchpoint");
+	}
+
+	if (!event_map)
+	{
+		event_map = mmap(siginfo->si_value.sival_ptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
+		if (MAP_FAILED == event_map)
+			err(1, "failed opening child watchpoint's mmap");
+	}
+	else
+	{
+		munmap(event_map, mmap_size);
+		close(perf_fd);
+
+		perf_fd = 0;
+		event_map = NULL;
+	}
 }
 
 
@@ -336,14 +355,25 @@ void inject_start()
 						 PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_DATA_SRC;
 
 		perf_fd = error->perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
-		if (error->perf_fd < 0 || MAP_FAILED == (
-				 error->event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0)
-		))
+		if (error->perf_fd < 0)
+			err(1, "failed opening watchpoint");
+
+
+		unsigned nthreads = ((intptr_t)next_thread - (intptr_t)threads) / sizeof(*next_thread);
+		void *buf = aligned_alloc(sysconf(_SC_PAGESIZE), nthreads * mmap_size), *arr[nthreads];
+
+		for (unsigned i = 0; i < nthreads; i++)
+		{
+			arr[i] = (void*)((intptr_t)buf + i * mmap_size);
+			event_map = mmap(buf, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
+		}
+
+		if (event_map == MAP_FAILED)
 			err(1, "failed opening watchpoint");
 
 		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
 
-		broadcast_sigalrm(-1);
+		broadcast_sigalrm(0, arr);
 	}
 
 	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%lu\n",
@@ -384,7 +414,7 @@ void inject_stop()
 	if (error->type == DUE)
 	{
 		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
-		printf(" inject_samples:%lu", (size_t)(error->event_map->data_head - error->event_map->data_tail) / sizeof(sample_t));
+		printf(" inject_samples:%lu", (size_t)(event_map->data_head - event_map->data_tail) / sizeof(sample_t));
 
 #ifdef __x86_64__
 # ifdef HAVE_XED
@@ -397,8 +427,8 @@ void inject_stop()
 # endif
 #endif
 
-		const intptr_t evt_start = (intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_tail;
-		const intptr_t evt_end   = (intptr_t)error->event_map + error->event_map->data_offset + error->event_map->data_head;
+		const intptr_t evt_start = (intptr_t)event_map + event_map->data_offset + event_map->data_tail;
+		const intptr_t evt_end   = (intptr_t)event_map + event_map->data_offset + event_map->data_head;
 		for (intptr_t evtptr = evt_start, sample_size = sizeof(struct perf_event_header); evtptr != evt_end; evtptr += sample_size)
 		{
 			sample_t *sample = (sample_t*)evtptr;
@@ -411,8 +441,8 @@ void inject_stop()
 			}
 
 			// print sample data
-			printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu",
-					(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time);
+			printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu sample_tid:%u",
+					(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time, sample->tid);
 
 			// only print sample meta-data if it does not fit with the expected vluaes
 			if ((sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) {
@@ -475,9 +505,6 @@ void inject_stop()
 # endif
 #endif
 		}
-
-		munmap(error->event_map, error->event_map->data_offset + error->event_map->data_size);
-		close(error->perf_fd);
 	}
 	printf("\n");
 
@@ -486,7 +513,7 @@ void inject_stop()
 }
 
 
-void register_target_region(int id, void *target_ptr, size_t target_size)
+void potential_target_region(int id, void *target_ptr, size_t target_size)
 {
 	if (error == NULL || error->pos != NULL)
 		return;
@@ -520,8 +547,6 @@ void register_target_region(int id, void *target_ptr, size_t target_size)
 }
 
 
-pthread_t threads[1024], *next_thread = threads + 0;
-
 
 #undef pthread_create
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)(void*), void *arg)
@@ -545,19 +570,22 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 
 // Called from orchestrating thread or start/stop perf, not from signal handler.
 // Used to get all worker (i.e. non-orchestrator) threads to flip their status to state
-void broadcast_sigalrm(int do_here)
+void broadcast_sigalrm(int do_here, void *payloads[])
 {
 	pthread_t self = pthread_self();
+	int here = -1;
 
-	for (pthread_t *thread = threads; thread != next_thread; ++thread)
-		if (*thread != self)
-			pthread_sigqueue(*thread, SIGALRM, (union sigval){0});
-		else if (do_here > -1)
-			do_here++;
+	for (int pos = 0; threads + pos != next_thread; pos++)
+		if (threads[pos] != self)
+			pthread_sigqueue(threads[pos], SIGALRM, (union sigval){.sival_ptr = payloads ? payloads[pos] : NULL});
+		else if (do_here)
+			here = pos;
 
-	if (do_here > 0)
+	if (do_here && here > 0)
 	{
-		setup_child_perfs(0);
+		siginfo_t data = {0};
+		data.si_value.sival_ptr = payloads ? payloads[here] : NULL;
+		handle_child_perfs(0, &data, NULL);
 	}
 }
 

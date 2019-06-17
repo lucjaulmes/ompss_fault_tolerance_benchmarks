@@ -6,10 +6,10 @@ void __attribute__((constructor)) inject_parse_env();
 void inject_start();
 void inject_stop();
 
-void register_target_region(int, void*, size_t);
+void potential_target_region(int, void*, size_t);
 void* inject_error(void* ignore);
-void setup_child_perfs(int __attribute__((unused)) signo);
-void broadcast_sigalrm(int do_here);
+void handle_child_perfs(int __attribute__((unused)) signo, siginfo_t *siginfo, void __attribute__((unused)) *ctx);
+void broadcast_sigalrm(int do_here, void*[]);
 
 #endif // INJECT_ERR_J
 
