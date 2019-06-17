@@ -4,7 +4,6 @@
 #include <sys/time.h>
 #include <sys/mman.h>
 
-#include "inject_err.h"
 #include "catchroi.h"
 
 static struct timeval start_time, stop_time;
@@ -12,18 +11,16 @@ static struct timeval start_time, stop_time;
 static enum {BEFORE_ROI = 0, DURING_ROI = 1, AFTER_ROI = 2} when = BEFORE_ROI;
 static _Atomic int taskcount[3] = {0};
 
+
 void start_roi()
 {
 	when = DURING_ROI;
-
-	inject_start();
 	gettimeofday(&start_time, NULL);
 }
 
 void stop_roi(int it)
 {
 	gettimeofday(&stop_time, NULL);
-	inject_stop();
 	long long time = 1000000 * (stop_time.tv_sec - start_time.tv_sec) + (stop_time.tv_usec - start_time.tv_usec);
 	if (it >= 0)
 		printf("solve_time:%lld iterations:%d\n", time, it);
@@ -85,12 +82,19 @@ void __parsec_roi_end () __attribute__ ((noinline, alias ("stop_roi")));
 /* Define the implementations that will intercept calls with preloading,
  * simply calling prefixed functions with ALLOC_IN_LIB flag. */
 
+mem_region_callback_t *register_target_region = NULL;
+void register_mem_region_callback(mem_region_callback_t *callback)
+{
+	register_target_region = callback;
+}
+
 static int alloc_counter = 0;
+
 
 void* CATCHROI_INSTRUMENT(malloc)(size_t size)
 {
 	void *ptr = malloc(size);
-	register_target_region(alloc_counter, ptr, size);
+	if (register_target_region) register_target_region(alloc_counter, ptr, size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, size);
 	return ptr;
 }
@@ -98,7 +102,7 @@ void* CATCHROI_INSTRUMENT(malloc)(size_t size)
 void* CATCHROI_INSTRUMENT(calloc)(size_t elt_count, size_t elt_size)
 {
 	void *ptr = calloc(elt_count, elt_size);
-	register_target_region(alloc_counter, ptr, elt_count * elt_size);
+	if (register_target_region) register_target_region(alloc_counter, ptr, elt_count * elt_size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, elt_count * elt_size);
 	return ptr;
 }
@@ -106,7 +110,7 @@ void* CATCHROI_INSTRUMENT(calloc)(size_t elt_count, size_t elt_size)
 void* CATCHROI_INSTRUMENT(realloc)(void *ptr, size_t size)
 {
 	ptr = realloc(ptr, size);
-	register_target_region(alloc_counter, ptr, size);
+	if (register_target_region) register_target_region(alloc_counter, ptr, size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, size);
 	return ptr;
 }
@@ -119,7 +123,7 @@ void* CATCHROI_INSTRUMENT(aligned_alloc)(size_t align, size_t size)
 	void *ptr = NULL;
 	posix_memalign(&ptr, align, size);
 #endif
-	register_target_region(alloc_counter, ptr, size);
+	if (register_target_region) register_target_region(alloc_counter, ptr, size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, size);
 	return ptr;
 }
@@ -127,7 +131,7 @@ void* CATCHROI_INSTRUMENT(aligned_alloc)(size_t align, size_t size)
 void* CATCHROI_INSTRUMENT(memalign)(size_t align, size_t size)
 {
 	void *ptr = memalign(align, size);
-	register_target_region(alloc_counter, ptr, size);
+	if (register_target_region) register_target_region(alloc_counter, ptr, size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, size);
 	return ptr;
 }
@@ -135,7 +139,7 @@ void* CATCHROI_INSTRUMENT(memalign)(size_t align, size_t size)
 int CATCHROI_INSTRUMENT(posix_memalign)(void **ptr, size_t align, size_t size)
 {
 	int ret = posix_memalign(ptr, align, size);
-	register_target_region(alloc_counter, *ptr, size);
+	if (register_target_region) register_target_region(alloc_counter, *ptr, size);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, *ptr, size);
 	return ret;
 }
@@ -149,7 +153,7 @@ void CATCHROI_INSTRUMENT(free)(void *ptr)
 void* CATCHROI_INSTRUMENT(mmap)(void *start, size_t len, int prot, int mem_flags, int fd, off_t off)
 {
 	void *ptr = mmap(start, len, prot, mem_flags, fd, off);
-	register_target_region(alloc_counter, ptr, len);
+	if (register_target_region) register_target_region(alloc_counter, ptr, len);
 	printf("alloc_%d [%p;%ld]\n", alloc_counter++, ptr, len);
 	return ptr;
 }

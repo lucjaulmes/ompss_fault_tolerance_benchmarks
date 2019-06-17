@@ -12,6 +12,9 @@ void stop_roi(int it);
 void task_started(int id);
 void task_ended(int id);
 
+typedef void (mem_region_callback_t)(int, void*, size_t);
+void register_mem_region_callback(mem_region_callback_t);
+
 #define PASTE_PREFIX(a, b) a ## b
 #define CATCHROI_INSTRUMENT(f) PASTE_PREFIX(_libcatchroi_, f)
 

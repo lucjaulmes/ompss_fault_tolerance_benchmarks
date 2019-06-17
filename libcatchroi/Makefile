@@ -2,30 +2,23 @@ CC=gcc
 CFLAGS=-g -O3 -fPIC -Wall -Wextra -std=gnu11
 ARFLAGS=rcs
 
-LIBS:=libcatchroi.a libcatchroi.so
+LIBS:=libcatchroi.a libcatchroi.so libinject.a libinject.so
 HEADERS:=catchroi.h
 
 make:$(LIBS)
 %.so:LDFLAGS+=-shared
-%.so:LDLIBS+=-pthread -lm
+libinject.so:LDLIBS+=-pthread -lm
 
 CATCHROI_HOME?=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 DESTDIR?=$(CATCHROI_HOME)
 
-INJECT=1
-ifeq ($(INJECT),1)
-INJECT_OBJ=inject_err.o
-XED=1
-else
-INJECT_OBJ=
-CPPFLAGS+=-DDISABLE_ERROR_INJECTION
-XED=0
-endif
+libcatchroi.so libcatchroi.a: EXTRA_OBJ:=
+libinject.so libinject.a: EXTRA_OBJ:=interpose.c
 
-lib%.a:%.o $(INJECT_OBJ)
+lib%.a:%.o $(EXTRA_OBJ)
 	$(AR) $(ARFLAGS) $@ $^
 
-lib%.so:%.o $(INJECT_OBJ)
+lib%.so:%.o $(EXTRA_OBJ)
 	$(LINK.o) $^ $(LDLIBS) -o $@
 
 clean:
@@ -43,10 +36,11 @@ uninstall:
 .PHONY: make clean install uninstall
 
 
+XED=1
 ifeq ($(XED)@$(shell uname -p),1@x86_64)
 XED_PATH?=$(HOME)/.local
 
-CPPFLAGS+=-I$(XED_PATH)/include -DHAVE_XED
-LDFLAGS+=-L$(XED_PATH)/lib -Wl,-rpath,$(XED_PATH)/lib
-LDLIBS+=-lxed
+libinject%:CPPFLAGS+=-I$(XED_PATH)/include -DHAVE_XED
+libinject%:LDFLAGS+=-L$(XED_PATH)/lib -Wl,-rpath,$(XED_PATH)/lib
+libinject%:LDLIBS+=-lxed
 endif

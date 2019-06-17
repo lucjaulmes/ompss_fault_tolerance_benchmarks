@@ -1,13 +1,21 @@
-#include <pthread.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
+#define _GNU_SOURCE
 #include <ctype.h>
-#include <math.h>
+#include <dlfcn.h>
 #include <err.h>
 #include <errno.h>
+#include <math.h>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#include "catchroi.h"
+
 
 #define OPTPARSE_IMPLEMENTATION
 #include "optparse.h"
@@ -74,7 +82,7 @@ _Static_assert(NREGS < sizeof(reg_names), "too many registers in mask");
 
 
 
-#include "inject_err.h"
+#include "inject.h"
 
 extern int roi_progress();
 
@@ -86,13 +94,16 @@ typedef struct _err
 	union { int64_t mask; double mask_as_double; };
 	volatile int64_t *pos;
 	int64_t region, page, tasks_finished;
-	uint64_t inject_time, start_time, real_inject_time, end_time;
+	uint64_t inject_time, start_time, pre_inject_time, real_inject_time, end_time;
 	int n_bits, perf_fd;
 	char type, undo, early;
 	_Atomic int inj;
+	struct perf_event_attr pe;
 	struct perf_event_mmap_page *event_map;
 	pthread_t injector_thread;
 } err_t;
+
+__thread int perf_fd;
 
 
 typedef struct _sample {
@@ -219,6 +230,16 @@ void inject_parse_env()
 		inject.mask = pick_bits(inject.n_bits);
 
 	error = memcpy(malloc(sizeof(err_t)), &inject, sizeof(err_t));
+	register_mem_region_callback(register_target_region);
+
+	if (inject.type == DUE)
+	{
+		struct sigaction alarm = (struct sigaction){.sa_handler = setup_child_perfs, .sa_flags = 0};
+		sigemptyset(&alarm.sa_mask);
+		sigaddset(&alarm.sa_mask, SIGALRM);
+		if (sigaction(SIGALRM, &alarm, NULL) != 0)
+			err(-1, "cannot setup SIGALRM handler");
+	}
 }
 
 
@@ -256,28 +277,13 @@ void sleep_ns(uint64_t ns)
 }
 
 
-inline void
-clflush(volatile void *p)
-{
-    asm volatile ("clflush (%0)" :: "r"(p));
-}
-
-
-inline uint64_t
-rdtsc()
-{
-    unsigned long a, d;
-    asm volatile ("cpuid; rdtsc" : "=a" (a), "=d" (d) :: "ebx", "ecx");
-    return a | ((uint64_t)d << 32);
-}
-
-
 void* inject_error(void* ignore)
 {
 	(void)ignore;
 
 	// default cancellability state + nanosleep is a cancellation point
 	sleep_ns(error->inject_time);
+	error->pre_inject_time = getns();
 
 	int64_t *ptr = (int64_t*)error->pos;
 	if (ptr == NULL)
@@ -303,6 +309,17 @@ void* inject_error(void* ignore)
 }
 
 
+void setup_child_perfs(int __attribute__((unused)) signo)
+{
+	perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, error->perf_fd, PERF_FLAG_FD_OUTPUT);
+	if (perf_fd < 0)
+		err(1, "failed opening child watchpoint");
+	struct perf_event_mmap_page *event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
+	if (MAP_FAILED == event_map)
+		err(1, "failed opening child watchpoint's mmap");
+}
+
+
 void inject_start()
 {
 	if (error == NULL)
@@ -310,21 +327,23 @@ void inject_start()
 
 	if (error->type == DUE)
 	{
-		struct perf_event_attr pe = {
+		error->pe = (struct perf_event_attr){
 			.type = PERF_TYPE_BREAKPOINT, .bp_type = HW_BREAKPOINT_RW, .bp_len = HW_BREAKPOINT_LEN_8, .bp_addr = (long long)error->pos,
 			.size = sizeof (struct perf_event_attr), .config = 0, .pinned = 1, .exclude_kernel = 1, .exclude_hv = 1,
 			.sample_period = 1, .wakeup_events = 1, .precise_ip = 3, .sample_regs_intr = REGS, .use_clockid = 1, .clockid = clockid
 		};
-		pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TIME | PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_ADDR | \
+		error->pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TIME | PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_ADDR | \
 						 PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_DATA_SRC;
 
-		error->perf_fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+		perf_fd = error->perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
 		if (error->perf_fd < 0 || MAP_FAILED == (
 				 error->event_map = mmap(NULL, 2 * sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0)
 		))
 			err(1, "failed opening watchpoint");
 
 		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+
+		broadcast_sigalrm(-1);
 	}
 
 	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%lu\n",
@@ -347,8 +366,8 @@ void inject_stop()
 	pthread_join(error->injector_thread, NULL);
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
-	printf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_time:%lu",
-				error->inj, error->end_time - error->start_time, error->tasks_finished, error->real_inject_time - error->start_time);
+	printf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_before:%lu inject_real_time:%lu",
+				error->inj, error->end_time - error->start_time, error->tasks_finished, error->pre_inject_time - error->start_time, error->real_inject_time - error->start_time);
 
 	if (error->inj > 0 && error->undo)
 	{
@@ -499,3 +518,80 @@ void register_target_region(int id, void *target_ptr, size_t target_size)
 	else
 		err(-1, "Can not find an injection target!");
 }
+
+
+pthread_t threads[1024], *next_thread = threads + 0;
+
+
+#undef pthread_create
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)(void*), void *arg)
+{
+	static int (*real_create)(pthread_t*, const pthread_attr_t*, void* (*)(void*), void*) = NULL;
+	if (!real_create) real_create = dlsym(RTLD_NEXT, "pthread_create");
+
+	Dl_info info;
+	if (!dladdr(*(void**)&start, &info))
+		dlerror();
+
+	int rc = real_create(thread, attr, start, arg);
+
+	/* Do not instrument thread used to inject errors or failed pthread_creates */
+	if ((info.dli_saddr == *(void**)&inject_error && strstr(info.dli_sname, "os_bootthread") != NULL)
+				|| (info.dli_fname != NULL && strstr(info.dli_fname, "libnanox") != NULL))
+		*next_thread++ = *thread;
+
+	return rc;
+}
+
+// Called from orchestrating thread or start/stop perf, not from signal handler.
+// Used to get all worker (i.e. non-orchestrator) threads to flip their status to state
+void broadcast_sigalrm(int do_here)
+{
+	pthread_t self = pthread_self();
+
+	for (pthread_t *thread = threads; thread != next_thread; ++thread)
+		if (*thread != self)
+			pthread_sigqueue(*thread, SIGALRM, (union sigval){0});
+		else if (do_here > -1)
+			do_here++;
+
+	if (do_here > 0)
+	{
+		setup_child_perfs(0);
+	}
+}
+
+
+void __parsec_roi_begin()
+{
+	static void (*real_roi_begin)() = NULL;
+	if (!real_roi_begin) real_roi_begin = dlsym(RTLD_NEXT, "__parsec_roi_begin");
+
+	real_roi_begin();
+	inject_start();
+}
+
+
+
+void stop_roi(int it)
+{
+	static void (*real_stop_measure)(int) = NULL;
+	if (!real_stop_measure) real_stop_measure = dlsym(RTLD_NEXT, "stop_roi");
+
+	inject_stop();
+	real_stop_measure(it);
+}
+
+
+void __parsec_roi_end()
+{
+	static void (*real_roi_end)() = NULL;
+	if (!real_roi_end) real_roi_end = dlsym(RTLD_NEXT, "__parsec_roi_end");
+
+	inject_stop();
+	real_roi_end();
+}
+
+void start_roi () __attribute__ ((noinline, alias ("__parsec_roi_begin")));
+void start_measure () __attribute__ ((noinline, alias ("start_roi")));
+void stop_measure (int) __attribute__ ((noinline, alias ("stop_roi")));
