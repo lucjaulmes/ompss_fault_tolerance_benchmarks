@@ -16,6 +16,16 @@
 
 #include "catchroi.h"
 
+#define safe_err(code, myerrmsg) do { \
+	const char *errnomsg = strerror(errno); \
+	write(STDERR_FILENO, myerrmsg, strlen(myerrmsg)); \
+	write(STDERR_FILENO, ": ", 2); \
+	write(STDERR_FILENO, errnomsg, strlen(errnomsg)); \
+	write(STDERR_FILENO, "\n", 1); \
+	_exit(code); \
+} while(0)
+
+
 
 #define OPTPARSE_IMPLEMENTATION
 #include "optparse.h"
@@ -30,8 +40,9 @@
 #include <linux/hw_breakpoint.h>
 
 
-int mmap_size = 2 * 4096;
 const int clockid = CLOCK_MONOTONIC_RAW;
+
+typedef enum { WATCHPOINT_CLEANUP = -1, WATCHPOINT_SETUP = 0, WATCHPOINT_ON = 1, WATCHPOINT_OFF = 2 } watchpoint_action_t;
 
 static inline uint64_t getns()
 {
@@ -96,15 +107,18 @@ typedef struct _err
 	volatile int64_t *pos;
 	int64_t region, page, tasks_finished;
 	uint64_t inject_time, start_time, pre_inject_time, real_inject_time, end_time;
-	int n_bits, perf_fd;
+	int n_bits;
 	char type, undo, early;
 	_Atomic int inj;
+	unsigned nthreads, mmap_size;
+	void *buf;
 	struct perf_event_attr pe;
 	pthread_t injector_thread;
 } err_t;
 
 __thread int perf_fd = 0;
 __thread struct perf_event_mmap_page *event_map = NULL;
+static _Atomic unsigned handlers_called = 0;
 
 
 typedef struct _sample {
@@ -242,8 +256,10 @@ void inject_parse_env()
 		sigaddset(&alarm.sa_mask, SIGALRM);
 		if (sigaction(SIGALRM, &alarm, NULL) != 0)
 			err(-1, "cannot setup SIGALRM handler");
-		mmap_size = 2 * sysconf(_SC_PAGESIZE);
+		error->mmap_size = 2 * sysconf(_SC_PAGESIZE);
 	}
+
+	*next_thread++ = pthread_self();
 }
 
 
@@ -301,7 +317,7 @@ void* inject_error(void* ignore)
 		error->mask = get;
 	}
 	else if (error->type == DUE)
-		ioctl(error->perf_fd, PERF_EVENT_IOC_ENABLE, 1); // use PERF_EVENT_IOC_REFRESH for just 1 event
+		broadcast_sigalrm(0, WATCHPOINT_ON);
 	else if (error->type != NONE)
 		err(-1, "Unrecognised error type");
 
@@ -315,27 +331,39 @@ void* inject_error(void* ignore)
 
 void handle_child_perfs(int __attribute__((unused)) signo, siginfo_t *siginfo, void __attribute__((unused)) *ctx)
 {
-	if (!perf_fd)
-	{
-		perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, error->perf_fd, 0);
-		if (perf_fd < 0)
-			err(1, "failed opening child watchpoint");
-	}
-
+	union sigval data = siginfo->si_value;
 	if (!event_map)
 	{
-		event_map = mmap(siginfo->si_value.sival_ptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
+		perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
+		if (perf_fd < 0)
+			safe_err(1, "failed opening child watchpoint");
+
+		event_map = mmap(data.sival_ptr, error->mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, perf_fd, 0);
 		if (MAP_FAILED == event_map)
-			err(1, "failed opening child watchpoint's mmap");
+			safe_err(1, "failed opening child watchpoint's mmap");
+
+		ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0);
 	}
-	else
+	else if (data.sival_int == WATCHPOINT_ON)
 	{
-		munmap(event_map, mmap_size);
+		ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 1);
+	}
+	else if (data.sival_int == WATCHPOINT_OFF)
+	{
+		ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+	}
+	else if (data.sival_int == WATCHPOINT_CLEANUP)
+	{
+		munmap(event_map, error->mmap_size);
 		close(perf_fd);
 
 		perf_fd = 0;
 		event_map = NULL;
 	}
+	else
+		safe_err(1, "Unexpected value for perf watchpoint action");
+
+	handlers_called++;
 }
 
 
@@ -354,26 +382,10 @@ void inject_start()
 		error->pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TIME | PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_ADDR | \
 						 PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_DATA_SRC;
 
-		perf_fd = error->perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
-		if (error->perf_fd < 0)
-			err(1, "failed opening watchpoint");
+		error->nthreads = ((intptr_t)next_thread - (intptr_t)threads) / sizeof(*next_thread);
+		error->buf = aligned_alloc(sysconf(_SC_PAGESIZE), error->nthreads * error->mmap_size);
 
-
-		unsigned nthreads = ((intptr_t)next_thread - (intptr_t)threads) / sizeof(*next_thread);
-		void *buf = aligned_alloc(sysconf(_SC_PAGESIZE), nthreads * mmap_size), *arr[nthreads];
-
-		for (unsigned i = 0; i < nthreads; i++)
-		{
-			arr[i] = (void*)((intptr_t)buf + i * mmap_size);
-			event_map = mmap(buf, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, error->perf_fd, 0);
-		}
-
-		if (event_map == MAP_FAILED)
-			err(1, "failed opening watchpoint");
-
-		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
-
-		broadcast_sigalrm(0, arr);
+		broadcast_sigalrm(1, WATCHPOINT_SETUP);
 	}
 
 	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%lu\n",
@@ -413,7 +425,7 @@ void inject_stop()
 
 	if (error->type == DUE)
 	{
-		ioctl(error->perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+		broadcast_sigalrm(1, WATCHPOINT_OFF);
 		printf(" inject_samples:%lu", (size_t)(event_map->data_head - event_map->data_tail) / sizeof(sample_t));
 
 #ifdef __x86_64__
@@ -505,6 +517,8 @@ void inject_stop()
 # endif
 #endif
 		}
+
+		broadcast_sigalrm(1, WATCHPOINT_CLEANUP);
 	}
 	printf("\n");
 
@@ -561,8 +575,9 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 	int rc = real_create(thread, attr, start, arg);
 
 	/* Do not instrument thread used to inject errors or failed pthread_creates */
-	if ((info.dli_saddr == *(void**)&inject_error && strstr(info.dli_sname, "os_bootthread") != NULL)
-				|| (info.dli_fname != NULL && strstr(info.dli_fname, "libnanox") != NULL))
+	if (!rc)
+	//		(info.dli_saddr == (void*)inject_error && strstr(info.dli_sname, "os_bootthread") != NULL)
+	//			|| (info.dli_fname != NULL && strstr(info.dli_fname, "libnanox") != NULL)
 		*next_thread++ = *thread;
 
 	return rc;
@@ -570,23 +585,34 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 
 // Called from orchestrating thread or start/stop perf, not from signal handler.
 // Used to get all worker (i.e. non-orchestrator) threads to flip their status to state
-void broadcast_sigalrm(int do_here, void *payloads[])
+void broadcast_sigalrm(int do_here, int action)
 {
 	pthread_t self = pthread_self();
+	union sigval data = {.sival_int = action};
 	int here = -1;
 
-	for (int pos = 0; threads + pos != next_thread; pos++)
+	handlers_called = 0;
+
+	for (unsigned pos = 0; pos < error->nthreads; pos++)
 		if (threads[pos] != self)
-			pthread_sigqueue(threads[pos], SIGALRM, (union sigval){.sival_ptr = payloads ? payloads[pos] : NULL});
+		{
+			if (action == WATCHPOINT_SETUP) data.sival_ptr = (void*)((intptr_t)error->buf + error->mmap_size * pos);
+			pthread_sigqueue(threads[pos], SIGALRM, data);
+		}
 		else if (do_here)
 			here = pos;
+		else
+			handlers_called++;
 
-	if (do_here && here > 0)
+	if (do_here && here > -1)
 	{
-		siginfo_t data = {0};
-		data.si_value.sival_ptr = payloads ? payloads[here] : NULL;
-		handle_child_perfs(0, &data, NULL);
+		if (action == WATCHPOINT_SETUP) data.sival_ptr = (void*)((intptr_t)error->buf + error->mmap_size * here);
+		siginfo_t info = {.si_value = data};
+		handle_child_perfs(0, &info, NULL);
 	}
+
+	while (handlers_called < error->nthreads)
+		;
 }
 
 
