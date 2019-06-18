@@ -42,7 +42,7 @@
 
 const int clockid = CLOCK_MONOTONIC_RAW;
 
-typedef enum { WATCHPOINT_CLEANUP = -1, WATCHPOINT_SETUP = 0, WATCHPOINT_ON = 1, WATCHPOINT_OFF = 2 } watchpoint_action_t;
+enum { WATCHPOINT_DONE = 0, WATCHPOINT_SETUP = 1, WATCHPOINT_GO = 2 };
 
 static inline uint64_t getns()
 {
@@ -111,13 +111,13 @@ typedef struct _err
 	char type, undo, early;
 	_Atomic int inj;
 	unsigned nthreads, mmap_size;
-	void *buf;
+	intptr_t buf;
 	struct perf_event_attr pe;
 	pthread_t injector_thread;
 } err_t;
 
 __thread int perf_fd = 0;
-__thread struct perf_event_mmap_page *event_map = NULL;
+__thread struct perf_event_mmap_page *local_map = NULL;
 static _Atomic unsigned handlers_called = 0;
 
 
@@ -317,7 +317,7 @@ void* inject_error(void* ignore)
 		error->mask = get;
 	}
 	else if (error->type == DUE)
-		broadcast_sigalrm(0, WATCHPOINT_ON);
+		broadcast_sigalrm(WATCHPOINT_GO);
 	else if (error->type != NONE)
 		err(-1, "Unrecognised error type");
 
@@ -332,36 +332,36 @@ void* inject_error(void* ignore)
 void handle_child_perfs(int __attribute__((unused)) signo, siginfo_t *siginfo, void __attribute__((unused)) *ctx)
 {
 	union sigval data = siginfo->si_value;
-	if (!event_map)
+	if (data.sival_int == WATCHPOINT_SETUP)
 	{
-		perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
-		if (perf_fd < 0)
-			safe_err(1, "failed opening child watchpoint");
+		if (!perf_fd)
+		{
+			perf_fd = syscall(__NR_perf_event_open, &error->pe, 0, -1, -1, 0);
+			if (perf_fd < 0)
+				safe_err(1, "failed opening child watchpoint");
+		}
 
-		event_map = mmap(data.sival_ptr, error->mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, perf_fd, 0);
-		if (MAP_FAILED == event_map)
+		local_map = mmap(NULL, error->mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, perf_fd, 0);
+		if (MAP_FAILED == local_map)
 			safe_err(1, "failed opening child watchpoint's mmap");
 
 		ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0);
 	}
-	else if (data.sival_int == WATCHPOINT_ON)
+	else if (data.sival_int == WATCHPOINT_GO)
 	{
 		ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 1);
 	}
-	else if (data.sival_int == WATCHPOINT_OFF)
+	else // if DONE, pass the address of where we want to save the samples
 	{
 		ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0);
-	}
-	else if (data.sival_int == WATCHPOINT_CLEANUP)
-	{
-		munmap(event_map, error->mmap_size);
+		memcpy(data.sival_ptr, local_map, error->mmap_size);
+
+		munmap(local_map, error->mmap_size);
 		close(perf_fd);
 
 		perf_fd = 0;
-		event_map = NULL;
+		local_map = NULL;
 	}
-	else
-		safe_err(1, "Unexpected value for perf watchpoint action");
 
 	handlers_called++;
 }
@@ -383,9 +383,10 @@ void inject_start()
 						 PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_DATA_SRC;
 
 		error->nthreads = ((intptr_t)next_thread - (intptr_t)threads) / sizeof(*next_thread);
-		error->buf = aligned_alloc(sysconf(_SC_PAGESIZE), error->nthreads * error->mmap_size);
+		error->buf = (intptr_t)aligned_alloc(sysconf(_SC_PAGESIZE), error->nthreads * error->mmap_size);
 
-		broadcast_sigalrm(1, WATCHPOINT_SETUP);
+		errno = 0;
+		broadcast_sigalrm(WATCHPOINT_SETUP);
 	}
 
 	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%lu\n",
@@ -425,8 +426,7 @@ void inject_stop()
 
 	if (error->type == DUE)
 	{
-		broadcast_sigalrm(1, WATCHPOINT_OFF);
-		printf(" inject_samples:%lu", (size_t)(event_map->data_head - event_map->data_tail) / sizeof(sample_t));
+		broadcast_sigalrm(WATCHPOINT_DONE);
 
 #ifdef __x86_64__
 # ifdef HAVE_XED
@@ -439,86 +439,90 @@ void inject_stop()
 # endif
 #endif
 
-		const intptr_t evt_start = (intptr_t)event_map + event_map->data_offset + event_map->data_tail;
-		const intptr_t evt_end   = (intptr_t)event_map + event_map->data_offset + event_map->data_head;
-		for (intptr_t evtptr = evt_start, sample_size = sizeof(struct perf_event_header); evtptr != evt_end; evtptr += sample_size)
+		for (intptr_t map = error->buf; map != error->buf + error->nthreads * error->mmap_size; map += error->mmap_size)
 		{
-			sample_t *sample = (sample_t*)evtptr;
-			sample_size = sample->header.size;
+			struct perf_event_mmap_page *event_map = (struct perf_event_mmap_page*)map;
+			printf("\nmmap:%#lx inject_samples:%lu", map, (size_t)(event_map->data_head - event_map->data_tail) / sizeof(sample_t));
 
-			if (sample->header.type != PERF_RECORD_SAMPLE || sample->header.size != sizeof(*sample))
+			const intptr_t evt_start = (intptr_t)event_map + event_map->data_offset + event_map->data_tail;
+			const intptr_t evt_end   = (intptr_t)event_map + event_map->data_offset + event_map->data_head;
+			for (intptr_t evtptr = evt_start, sample_size = sizeof(struct perf_event_header); evtptr != evt_end; evtptr += sample_size)
 			{
-				warnx("Unexpected sample metadata: type=%u size=%u", sample->header.type, sample->header.size);
-				continue;
-			}
+				sample_t *sample = (sample_t*)evtptr;
+				sample_size = sample->header.size;
 
-			// print sample data
-			printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu sample_tid:%u",
-					(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time, sample->tid);
+				if (sample->header.type != PERF_RECORD_SAMPLE || sample->header.size != sizeof(*sample))
+				{
+					warnx("Unexpected sample metadata: type=%u size=%u", sample->header.type, sample->header.size);
+					continue;
+				}
 
-			// only print sample meta-data if it does not fit with the expected vluaes
-			if ((sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) {
-				printf(" sample_cpu_mode:%d", sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK);
-			}
+				// print sample data
+				printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu sample_tid:%u",
+						(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time, sample->tid);
 
-			if (sample->addr != (uintptr_t)error->pos) {
-				printf(" sample_address:%#016lx", sample->addr);
-			}
+				// only print sample meta-data if it does not fit with the expected vluaes
+				if ((sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) {
+					printf(" sample_cpu_mode:%d", sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK);
+				}
 
-			if (sample->data_src.mem_op != PERF_MEM_OP_NA || sample->data_src.mem_lvl != PERF_MEM_LVL_NA) {
-				printf(" sample_datasrc_memop:%x sample_datasrc_memlvl:%x", sample->data_src.mem_op, sample->data_src.mem_lvl);
-			}
+				if (sample->addr != (uintptr_t)error->pos) {
+					printf(" sample_address:%#016lx", sample->addr);
+				}
 
-			if (sample->abi != PERF_SAMPLE_REGS_ABI_64) {
-				printf(" sample_regs_abi:%s", sample->abi ? "32b" : "none");
-			}
+				if (sample->data_src.mem_op != PERF_MEM_OP_NA || sample->data_src.mem_lvl != PERF_MEM_LVL_NA) {
+					printf(" sample_datasrc_memop:%x sample_datasrc_memlvl:%x", sample->data_src.mem_op, sample->data_src.mem_lvl);
+				}
 
-			// print all the registers
-			printf(" sample_regs");
-			for (size_t reg = 0; reg < NREGS; reg++)
-				if (REGS & (1 << reg))
-					printf(":%s=%016lx", reg_names[reg], sample->regs[reg]);
+				if (sample->abi != PERF_SAMPLE_REGS_ABI_64) {
+					printf(" sample_regs_abi:%s", sample->abi ? "32b" : "none");
+				}
 
-			// finally decode
+				// print all the registers
+				printf(" sample_regs");
+				for (size_t reg = 0; reg < NREGS; reg++)
+					if (REGS & (1 << reg))
+						printf(":%s=%016lx", reg_names[reg], sample->regs[reg]);
+
+				// finally decode
 #ifdef __x86_64__
 # ifdef HAVE_XED
-			if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
-				printf(" xed_decode failed");
+				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
+					printf(" xed_decode failed");
 
-			else
-			{
-				size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
-				printf(" sample_memops:%lu", memops);
-
-				for (unsigned m = 0; m < memops; m++)
+				else
 				{
-					printf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
-						m, xed_decoded_inst_mem_read(&xedd, 0),
-						m, xed_decoded_inst_mem_written(&xedd, 0),
-						m, xed_decoded_inst_mem_written_only(&xedd, 0));
+					size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
+					printf(" sample_memops:%lu", memops);
+
+					for (unsigned m = 0; m < memops; m++)
+					{
+						printf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
+							m, xed_decoded_inst_mem_read(&xedd, 0),
+							m, xed_decoded_inst_mem_written(&xedd, 0),
+							m, xed_decoded_inst_mem_written_only(&xedd, 0));
+					}
 				}
-			}
 # else
-			printf(" no instruction decoder");
+				printf(" no instruction decoder");
 # endif
 
 #else
 # ifdef __powerpc64__
-			uint32_t *instr = (uint32_t*)sample->ip;
+				uint32_t *instr = (uint32_t*)sample->ip;
 
-			uint32_t primary_opcode = (*instr >> 26) & 0x3fU;
-			uint32_t st = (primary_opcode & 0x24U) == 0x24U;
-			uint32_t ld = (primary_opcode & 0x24U) == 0x20U;
+				uint32_t primary_opcode = (*instr >> 26) & 0x3fU;
+				uint32_t st = (primary_opcode & 0x24U) == 0x24U;
+				uint32_t ld = (primary_opcode & 0x24U) == 0x20U;
 
-			printf("sample_addr:%p sample_instr:%x primary_opcode:%d memop_read:%u memop_write:%u",
-						(void*)instr, *instr, primary_opcode, ld, st);
+				printf("sample_addr:%p sample_instr:%x primary_opcode:%d memop_read:%u memop_write:%u",
+							(void*)instr, *instr, primary_opcode, ld, st);
 # else
 #  error "Architecture not implemented for decoding instructions"
 # endif
 #endif
+			}
 		}
-
-		broadcast_sigalrm(1, WATCHPOINT_CLEANUP);
 	}
 	printf("\n");
 
@@ -585,7 +589,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 
 // Called from orchestrating thread or start/stop perf, not from signal handler.
 // Used to get all worker (i.e. non-orchestrator) threads to flip their status to state
-void broadcast_sigalrm(int do_here, int action)
+void broadcast_sigalrm(int action)
 {
 	pthread_t self = pthread_self();
 	union sigval data = {.sival_int = action};
@@ -596,23 +600,20 @@ void broadcast_sigalrm(int do_here, int action)
 	for (unsigned pos = 0; pos < error->nthreads; pos++)
 		if (threads[pos] != self)
 		{
-			if (action == WATCHPOINT_SETUP) data.sival_ptr = (void*)((intptr_t)error->buf + error->mmap_size * pos);
+			if (action == WATCHPOINT_DONE) data.sival_ptr = (void*)(error->buf + error->mmap_size * pos);
 			pthread_sigqueue(threads[pos], SIGALRM, data);
 		}
-		else if (do_here)
+		else // don't call SIGALRM on self, just run inline below.
 			here = pos;
-		else
-			handlers_called++;
 
-	if (do_here && here > -1)
+	if (here >= 0)
 	{
-		if (action == WATCHPOINT_SETUP) data.sival_ptr = (void*)((intptr_t)error->buf + error->mmap_size * here);
+		if (action == WATCHPOINT_DONE) data.sival_ptr = (void*)(error->buf + error->mmap_size * here);
 		siginfo_t info = {.si_value = data};
 		handle_child_perfs(0, &info, NULL);
 	}
 
-	while (handlers_called < error->nthreads)
-		;
+	while (handlers_called < error->nthreads);
 }
 
 
