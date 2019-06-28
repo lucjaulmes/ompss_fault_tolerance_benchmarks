@@ -432,17 +432,13 @@ void inject_stop()
 # ifdef HAVE_XED
 		// Use XED to decode instructions, in particular find out if it was reading or writing
 		xed_tables_init();
-
-		xed_decoded_inst_t xedd = {0};
-		xed_decoded_inst_zero(&xedd);
-		xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
 # endif
 #endif
 
 		for (intptr_t map = error->buf; map != error->buf + error->nthreads * error->mmap_size; map += error->mmap_size)
 		{
 			struct perf_event_mmap_page *event_map = (struct perf_event_mmap_page*)map;
-			printf("\nmmap:%#lx inject_samples:%lu", map, (size_t)(event_map->data_head - event_map->data_tail) / sizeof(sample_t));
+			printf("\ninject_samples:%llu inject_maxsamples:%llu", (event_map->data_head - event_map->data_tail) / sizeof(sample_t), event_map->data_size / sizeof(sample_t));
 
 			const intptr_t evt_start = (intptr_t)event_map + event_map->data_offset + event_map->data_tail;
 			const intptr_t evt_end   = (intptr_t)event_map + event_map->data_offset + event_map->data_head;
@@ -487,6 +483,10 @@ void inject_stop()
 				// finally decode
 #ifdef __x86_64__
 # ifdef HAVE_XED
+				xed_decoded_inst_t xedd = {0};
+				xed_decoded_inst_zero(&xedd);
+				xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
+
 				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
 					printf(" xed_decode failed");
 
