@@ -1,10 +1,28 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <stdio.h>
+#include <time.h>
 #include <sys/time.h>
 #include <sys/mman.h>
 
 #include "catchroi.h"
+
+const int clockid = CLOCK_MONOTONIC_RAW;
+uint64_t time_zero_ns = 0;
+
+uint64_t getns()
+{
+    struct timespec get_time;
+    clock_gettime(clockid, &get_time);
+
+    return (uint64_t)(get_time.tv_sec * 1000000000 + get_time.tv_nsec) - time_zero_ns;
+}
+
+void __attribute__((constructor)) setup_time_zero()
+{
+	time_zero_ns = getns();
+}
+
 
 static struct timeval start_time, stop_time;
 

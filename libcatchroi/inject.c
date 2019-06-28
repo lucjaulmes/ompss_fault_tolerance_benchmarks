@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "catchroi.h"
@@ -40,17 +39,8 @@
 #include <linux/hw_breakpoint.h>
 
 
-const int clockid = CLOCK_MONOTONIC_RAW;
 
 enum { WATCHPOINT_DONE = 0, WATCHPOINT_SETUP = 1, WATCHPOINT_GO = 2 };
-
-static inline uint64_t getns()
-{
-	struct timespec get_time;
-	clock_gettime(clockid, &get_time);
-
-	return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
-}
 
 
 #ifdef __x86_64__
@@ -409,8 +399,8 @@ void inject_stop()
 	pthread_join(error->injector_thread, NULL);
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
-	printf("inject_done:%d end_time:%lu inject_finished_tasks:%ld inject_real_before:%lu inject_real_time:%lu",
-				error->inj, error->end_time - error->start_time, error->tasks_finished, error->pre_inject_time - error->start_time, error->real_inject_time - error->start_time);
+	printf("inject_done:%d start_time:%lu end_time:%lu inject_finished_tasks:%ld inject_real_before:%lu inject_real_time:%lu",
+				error->inj, error->start_time, error->end_time, error->tasks_finished, error->pre_inject_time, error->real_inject_time);
 
 	if (error->inj > 0 && error->undo)
 	{
@@ -453,9 +443,9 @@ void inject_stop()
 					continue;
 				}
 
-				// print sample data
+				// print sample data, the time is on the same clock but not shifted by 0
 				printf("\nsample_precise:%d sample_pc:%#016lx sample_time:%lu sample_tid:%u",
-						(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - error->start_time, sample->tid);
+						(sample->header.misc & PERF_RECORD_MISC_EXACT_IP) != 0, sample->ip, sample->time - time_zero_ns, sample->tid);
 
 				// only print sample meta-data if it does not fit with the expected vluaes
 				if ((sample->header.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) {

@@ -12,7 +12,15 @@
 #include <cstdlib>
 
 #ifndef NOCATCHROI
-#include "catchroi.h"
+# include "catchroi.h"
+#else
+inline uint64_t getns()
+{
+    struct timespec get_time;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &get_time);
+
+    return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
+}
 #endif
 
 
@@ -68,14 +76,6 @@ public:
     std::map<uint64_t, struct wd_info> wds;
     std::map<uint64_t, uint64_t> wd_start_time;
     static std::mutex maps_mutex_;
-
-    inline uint64_t getns()
-    {
-        struct timespec get_time;
-        clock_gettime(CLOCK_MONOTONIC_RAW, &get_time);
-
-        return get_time.tv_sec * 1000000000 + get_time.tv_nsec;
-    }
 
     // low-level instrumentation interface (mandatory functions)
     void initialize(void)

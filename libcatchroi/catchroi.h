@@ -1,9 +1,19 @@
 #ifndef CATCHROI_H
 #define CATCHROI_H
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
+
+
+extern const int clockid;
+extern uint64_t time_zero_ns;
+
+uint64_t getns();
+
 
 void start_roi();
 void stop_roi(int it);
