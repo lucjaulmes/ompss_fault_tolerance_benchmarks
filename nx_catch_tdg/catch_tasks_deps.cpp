@@ -10,6 +10,8 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #ifndef NOCATCHROI
 # include "catchroi.h"
@@ -67,6 +69,7 @@ public:
     struct wd_info
     {
         std::string description;
+        unsigned thread;
         uint64_t start, end, duration;
         std::vector<struct dep_info> deps;
     };
@@ -92,7 +95,7 @@ public:
         ensure(iD->getEventKey("wd-num-deps") != 0 && iD->getEventKey("wd-deps-ptr"), "Failed to enable events");
 
         std::lock_guard<std::mutex> lock_maps(maps_mutex_);
-        wds.insert(std::make_pair(1, (struct wd_info){"main", 0}));
+        wds.insert(std::make_pair(1, (struct wd_info){"main", (unsigned)-1, 0}));
     }
 
     void finalize(void)
@@ -126,11 +129,11 @@ public:
         }
 
         std::ostream csv_out(buf);
-        csv_out << "wd:description:start:end:duration:dependencies\n";
+        csv_out << "wd:description:start:end:duration:thread:dependencies\n";
 
         for (const auto &wd: wds) {
             csv_out << wd.first << ':' << wd.second.description << ':' << wd.second.start << ':' << wd.second.end
-                    << ':' << wd.second.duration << ':' << wd.second.deps.size();
+                    << ':' << wd.second.duration << ':' << wd.second.thread << ':' << wd.second.deps.size();
             for (const auto &dep: wd.second.deps)
                 csv_out << ':' << std::hex << (uintptr_t)dep.addr << std::dec << ':' << dep.size << ':' << dep.desc;
             csv_out << '\n';
@@ -195,7 +198,7 @@ public:
                 size_t num_deps = e[2].getValue();
                 nanos::DataAccess *deps = (nanos::DataAccess*)e[3].getValue();
 
-                struct wd_info wd_data({std::string(description), 0});
+                struct wd_info wd_data({std::string(description), (unsigned)-1, 0});
 
                 for (nanos::DataAccess *dep = deps; dep != deps + num_deps; ++dep) {
                     // NB. ignores canRename and supposes contiguous dependencies
@@ -231,6 +234,7 @@ public:
                 if (!wd.duration) {
                     wd.start = timestamp;
                 }
+                wd.thread = syscall(SYS_gettid);
 
             } else if (e_key == user_func && e_type == NANOS_BURST_END) {
 #ifndef NOCATCHROI
