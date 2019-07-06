@@ -39,6 +39,10 @@
 #include <linux/hw_breakpoint.h>
 
 
+// We know the error injection framework takes up to 42.Xms in the worst cases.
+#ifndef FRAMEWORK_INJECT_SHIFT_NS
+#define FRAMEWORK_INJECT_SHIFT_NS 45000000L
+#endif
 
 enum { WATCHPOINT_DONE = 0, WATCHPOINT_SETUP = 1, WATCHPOINT_GO = 2 };
 
@@ -231,7 +235,8 @@ void inject_parse_env()
 	// seed == 0 to get a different seed every time
 	srand(seed ? seed : (int)getns());
 
-	inject.inject_time = llround(inject.inject_time * ((double)rand() / (double)RAND_MAX));
+	// expand the target range by the shift duration
+	inject.inject_time = llround((inject.inject_time + FRAMEWORK_INJECT_SHIFT_NS) * ((double)rand() / (double)RAND_MAX));
 
 	if (inject.type == FLIP)
 		inject.mask = pick_bits(inject.n_bits);
@@ -276,7 +281,7 @@ double exponential(const double lambda, const double x)
 static inline
 void sleep_ns(uint64_t ns)
 {
-	struct timespec next_sim_fault, remainder;
+	struct timespec next_sim_fault, remainder = {0};
 
 	next_sim_fault.tv_sec  = ns / 1000000000ULL;
 	next_sim_fault.tv_nsec = ns % 1000000000ULL;
@@ -379,8 +384,8 @@ void inject_start()
 		broadcast_sigalrm(WATCHPOINT_SETUP);
 	}
 
-	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%lu\n",
-			error->type, error->mask, error->mask_as_double, (void*)error->pos, error->undo, error->inject_time);
+	printf("inject_type:%d inject_mask:%#016lx inject_dbl:%g inject_addr:%p inject_back:%d inject_time:%ld\n",
+			error->type, error->mask, error->mask_as_double, (void*)error->pos, error->undo, (long)error->inject_time - FRAMEWORK_INJECT_SHIFT_NS);
 	fflush(stdout);
 
 	if (!pthread_create(&error->injector_thread, NULL, &inject_error, (void*)error) == 0)
@@ -612,8 +617,17 @@ void __parsec_roi_begin()
 	static void (*real_roi_begin)() = NULL;
 	if (!real_roi_begin) real_roi_begin = dlsym(RTLD_NEXT, "__parsec_roi_begin");
 
-	real_roi_begin();
+	uint64_t pthread_creation_time = getns();
 	inject_start();
+
+	// This shift allows to inject errors in the beginning of the ROI.
+	// In effect, we are injecting at inject_time - FRAMEWORK_INJECT_SHIFT_NS
+	pthread_creation_time = getns() - pthread_creation_time;
+	if (pthread_creation_time < FRAMEWORK_INJECT_SHIFT_NS)
+		sleep_ns(FRAMEWORK_INJECT_SHIFT_NS - pthread_creation_time);
+
+	error->start_time = getns();
+	real_roi_begin();
 }
 
 
