@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <err.h>
 #include <errno.h>
 #include <math.h>
@@ -395,6 +396,122 @@ void inject_start()
 }
 
 
+#ifdef __x86_64__
+# ifdef HAVE_XED
+struct search_headers {
+	size_t npcs, nheaders;
+	intptr_t *pcs, *headers, *header_ends;
+};
+
+static inline long min(long a, long b) { return a < b ? a : b; }
+
+
+int list_matching_headers(struct dl_phdr_info *info, size_t __attribute__((unused)) size, void *data)
+{
+	struct search_headers *search = data;
+	for (const Elf64_Phdr *header = info->dlpi_phdr; header != info->dlpi_phdr + info->dlpi_phnum; ++header)
+	{
+		if (header->p_type != PT_LOAD || (header->p_flags & PF_X) == 0)
+			continue;
+
+		intptr_t addr = info->dlpi_addr + header->p_vaddr, size = min(header->p_filesz, header->p_memsz), *pc;
+
+		for (pc = search->pcs; pc != search->pcs + search->npcs; ++pc)
+			if ((*pc - addr) >= 0 && (*pc - addr) < size)
+				break;
+
+		if (pc != search->pcs + search->npcs)
+		{
+			search->headers[search->nheaders] = addr;
+			search->header_ends[search->nheaders] = addr + size;
+			search->nheaders++;
+		}
+	}
+
+	return 0;
+}
+
+
+void decode_pcs(intptr_t *pcs, int npcs)
+{
+	if (npcs == 0) return;
+
+	// sort and remove duplicates Program Counters
+	int sorted_size = 1;
+	for (int next_insert = 1, insert_pos = 0; next_insert < npcs; next_insert++, sorted_size++)
+	{
+		intptr_t insert = pcs[next_insert];
+		for (insert_pos = 0; insert_pos < sorted_size; insert_pos++)
+		{
+			if (pcs[insert_pos] < insert)
+				continue;
+			else if (pcs[insert_pos] == insert)
+				sorted_size--;
+			else if (insert_pos < sorted_size)
+				// shift remainder of array by 1 for insertion
+				memmove(pcs + insert_pos + 1, pcs + insert_pos, (sorted_size - insert_pos) * sizeof(*pcs));
+			break;
+		}
+
+		pcs[insert_pos] = insert;
+	}
+	npcs = sorted_size;
+
+	// List .text program sections and contain one of the PCs
+	intptr_t headers[npcs], header_ends[npcs];
+	struct search_headers search = {npcs, 0, pcs, headers, header_ends};
+	dl_iterate_phdr(list_matching_headers, (void*)&search);
+
+	// Use XED to decode instructions, in particular find out if it was reading or writing
+	xed_tables_init();
+
+	xed_decoded_inst_t xedd = {0};
+	xed_decoded_inst_zero(&xedd);
+	xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
+
+	// For every program header, decode all instructions
+	for (size_t i = 0; i < search.nheaders; i++)
+		for (intptr_t instr = headers[i], instr_size = 0, *pc = pcs; instr < header_ends[i]; instr += instr_size)
+		{
+			// Advance in PCs
+			while (pc != pcs + npcs && *pc < instr) pc++;
+			if (pc == pcs + npcs) break;
+
+			// decode the size of the instruction to advance until the currently-considered sampled PC
+			instr_size = min(15, header_ends[i] - instr);
+
+			xed_decoded_inst_zero_keep_mode(&xedd);
+			if (xed_ild_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE
+					|| (instr_size = xed_decoded_inst_get_length(&xedd)) == 0)
+			{
+				warnx("uncorrectly decoded instruction length at %#016lx", instr);
+				break;
+			}
+
+			// Print the sampled PC and the previous one as well
+			if (instr == *pc || (instr + instr_size) == *pc)
+			{
+				xed_decoded_inst_zero_keep_mode(&xedd);
+				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE)
+				{
+					warnx("uncorrectly decoded instruction at %#016lx", instr);
+					break;
+				}
+
+				size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
+				printf("\ninstr_addr:%#016lx instr_size:%ld instr_next:%#016lx instr_memops:%lu", instr, instr_size, instr + instr_size, memops);
+
+				for (unsigned m = 0; m < memops; m++)
+					printf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
+							m, xed_decoded_inst_mem_read(&xedd, 0),
+							m, xed_decoded_inst_mem_written(&xedd, 0),
+							m, xed_decoded_inst_mem_written_only(&xedd, 0));
+			}
+		}
+}
+# endif
+#endif
+
 void inject_stop()
 {
 	if (error == NULL)
@@ -425,18 +542,21 @@ void inject_stop()
 
 #ifdef __x86_64__
 # ifdef HAVE_XED
-		// Use XED to decode instructions, in particular find out if it was reading or writing
-		xed_tables_init();
+		int npcs = 0;
+		intptr_t *pcs = calloc(error->nthreads * error->mmap_size / sizeof(sample_t), sizeof(*pcs));
 # endif
 #endif
 
 		for (intptr_t map = error->buf; map != error->buf + error->nthreads * error->mmap_size; map += error->mmap_size)
 		{
 			struct perf_event_mmap_page *event_map = (struct perf_event_mmap_page*)map;
-			printf("\ninject_samples:%llu inject_maxsamples:%llu", (event_map->data_head - event_map->data_tail) / sizeof(sample_t), event_map->data_size / sizeof(sample_t));
-
 			const intptr_t evt_start = (intptr_t)event_map + event_map->data_offset + event_map->data_tail;
 			const intptr_t evt_end   = (intptr_t)event_map + event_map->data_offset + event_map->data_head;
+
+			printf("\ninject_samples:%lu inject_maxsamples:%llu",
+						(evt_end - evt_start) / sizeof(sample_t),
+						event_map->data_size / sizeof(sample_t));
+
 			for (intptr_t evtptr = evt_start, sample_size = sizeof(struct perf_event_header); evtptr != evt_end; evtptr += sample_size)
 			{
 				sample_t *sample = (sample_t*)evtptr;
@@ -478,28 +598,9 @@ void inject_stop()
 				// finally decode
 #ifdef __x86_64__
 # ifdef HAVE_XED
-				xed_decoded_inst_t xedd = {0};
-				xed_decoded_inst_zero(&xedd);
-				xed_decoded_inst_set_mode(&xedd, XED_MACHINE_MODE_LONG_64, XED_ADDRESS_WIDTH_64b);
-
-				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, sample->ip), 15) != XED_ERROR_NONE)
-					printf(" xed_decode failed");
-
-				else
-				{
-					size_t memops = xed_decoded_inst_number_of_memory_operands(&xedd);
-					printf(" sample_memops:%lu", memops);
-
-					for (unsigned m = 0; m < memops; m++)
-					{
-						printf(" memop%u_read:%d memop%u_write:%d memop%u_writeonly:%d",
-							m, xed_decoded_inst_mem_read(&xedd, 0),
-							m, xed_decoded_inst_mem_written(&xedd, 0),
-							m, xed_decoded_inst_mem_written_only(&xedd, 0));
-					}
-				}
+				pcs[npcs++] = sample->ip;
 # else
-				printf(" no instruction decoder");
+				printf(" no XED instruction decoder");
 # endif
 
 #else
@@ -518,6 +619,12 @@ void inject_stop()
 #endif
 			}
 		}
+
+#ifdef __x86_64__
+# ifdef HAVE_XED
+		decode_pcs(pcs, npcs);
+# endif
+#endif
 	}
 	printf("\n");
 
