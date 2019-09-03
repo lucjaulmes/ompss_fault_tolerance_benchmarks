@@ -484,7 +484,7 @@ void decode_pcs(intptr_t *pcs, int npcs)
 			if (xed_ild_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE
 					|| (instr_size = xed_decoded_inst_get_length(&xedd)) == 0)
 			{
-				warnx("uncorrectly decoded instruction length at %#016lx", instr);
+				warnx("\nuncorrectly decoded instruction length at %#016lx", instr);
 				break;
 			}
 
@@ -494,7 +494,7 @@ void decode_pcs(intptr_t *pcs, int npcs)
 				xed_decoded_inst_zero_keep_mode(&xedd);
 				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE)
 				{
-					warnx("uncorrectly decoded instruction at %#016lx", instr);
+					warnx("\nuncorrectly decoded instruction at %#016lx", instr);
 					break;
 				}
 
