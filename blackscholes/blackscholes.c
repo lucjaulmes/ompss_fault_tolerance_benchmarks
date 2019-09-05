@@ -131,7 +131,7 @@ int bs_calc(int numOptions, int bsize, OptionData *opt, fptype *prices)
 	}
 
 	#ifdef ERR_CHK
-	#pragma omp taskloop grainsize(bsize) in(prices[i;bsize]) reduction(+:numError) label(check)
+	#pragma omp taskloop grainsize(bsize) in(opt->DGrefval[i;bsize], prices[i;bsize]) reduction(+:numError) label(check)
 	for (i = 0; i < numOptions; i ++)
 	{
 		fptype priceDelta = opt->DGrefval[i] - prices[i];
