@@ -724,16 +724,20 @@ void __parsec_roi_begin()
 	static void (*real_roi_begin)() = NULL;
 	if (!real_roi_begin) real_roi_begin = dlsym(RTLD_NEXT, "__parsec_roi_begin");
 
-	uint64_t pthread_creation_time = getns();
-	inject_start();
+	if (error != NULL)
+	{
+		uint64_t pthread_creation_time = getns();
+		inject_start();
 
-	// This shift allows to inject errors in the beginning of the ROI.
-	// In effect, we are injecting at inject_time - FRAMEWORK_INJECT_SHIFT_NS
-	pthread_creation_time = getns() - pthread_creation_time;
-	if (pthread_creation_time < FRAMEWORK_INJECT_SHIFT_NS)
-		sleep_ns(FRAMEWORK_INJECT_SHIFT_NS - pthread_creation_time);
+		// This shift allows to inject errors in the beginning of the ROI.
+		// In effect, we are injecting at inject_time - FRAMEWORK_INJECT_SHIFT_NS
+		pthread_creation_time = getns() - pthread_creation_time;
+		if (pthread_creation_time < FRAMEWORK_INJECT_SHIFT_NS)
+			sleep_ns(FRAMEWORK_INJECT_SHIFT_NS - pthread_creation_time);
 
-	error->start_time = getns();
+		error->start_time = getns();
+	}
+
 	real_roi_begin();
 }
 
