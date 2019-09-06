@@ -478,14 +478,16 @@ void decode_pcs(intptr_t *pcs, int npcs)
 			if (pc == pcs + npcs) break;
 
 			// decode the size of the instruction to advance until the currently-considered sampled PC
-			instr_size = min(15, header_ends[i] - instr);
+			int max_instr_size = min(15, header_ends[i] - instr);
 
 			xed_decoded_inst_zero_keep_mode(&xedd);
-			if (xed_ild_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE
-					|| (instr_size = xed_decoded_inst_get_length(&xedd)) == 0)
+			int ok = xed_ild_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), max_instr_size);
+			instr_size = xed_decoded_inst_get_length(&xedd);
+			if (ok != XED_ERROR_NONE || instr_size == 0)
 			{
-				warnx("\nuncorrectly decoded instruction length at %#016lx", instr);
-				break;
+				printf("\nWARNING: error decoding instruction length at %#016lx: returned %s, length %ld",
+						instr, xed_error_enum_t2str(ok), instr_size);
+				if (instr_size == 0) break;
 			}
 
 			// Print the sampled PC and the previous one as well
@@ -494,7 +496,7 @@ void decode_pcs(intptr_t *pcs, int npcs)
 				xed_decoded_inst_zero_keep_mode(&xedd);
 				if (xed_decode(&xedd, XED_STATIC_CAST(const xed_uint8_t*, instr), instr_size) != XED_ERROR_NONE)
 				{
-					warnx("\nuncorrectly decoded instruction at %#016lx", instr);
+					printf("\nuncorrectly decoded instruction at %#016lx", instr);
 					break;
 				}
 
