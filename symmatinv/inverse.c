@@ -239,9 +239,9 @@ void LAPACK(syrk)(char *uplo, char *trans, int *n, int *k, REAL *alpha, REAL *a,
 void LAPACK(trtri)(const char *uplo, const char *diag, const int *n, REAL *a, const int *lda, LONG *info);
 void LAPACK(symm)(const char *side, const char *uplo, const int *m, const int *n, REAL *alpha, REAL *a, int *lda, REAL *b, int *ldb, REAL *beta, REAL *c, int *ldc);
 void LAPACK(lauum)(const char *uplo, const int *n, REAL *a, const int *lda, int *info);
+REAL LAPACK(lamch)(char *info);
 
 float get_time();
-static int check_factorization(int, REAL *, REAL *, char, REAL);
 static int check_inverse(int, int, int, REAL **, REAL *, char, REAL);
 
 //void gpu_spotf2_var1_(char *, int *, unsigned int *, int *, int *);
@@ -249,144 +249,6 @@ void gpu_spotrf_var1_(char *, int *, unsigned int *, int *, int *, int *);
 
 void cholesky_inverse(int ts, int nt, REAL *Ah[nt][nt]);
 
-
-enum blas_order_type
-{
-	blas_rowmajor = 101,
-	blas_colmajor = 102
-};
-
-enum blas_cmach_type
-{
-	blas_base      = 151,
-	blas_t         = 152,
-	blas_rnd       = 153,
-	blas_ieee      = 154,
-	blas_emin      = 155,
-	blas_emax      = 156,
-	blas_eps       = 157,
-	blas_prec      = 158,
-	blas_underflow = 159,
-	blas_overflow  = 160,
-	blas_sfmin     = 161
-};
-
-enum blas_norm_type
-{
-	blas_one_norm       = 171,
-	blas_real_one_norm  = 172,
-	blas_two_norm       = 173,
-	blas_frobenius_norm = 174,
-	blas_inf_norm       = 175,
-	blas_real_inf_norm  = 176,
-	blas_max_norm       = 177,
-	blas_real_max_norm  = 178
-};
-
-
-static void
-BLAS_ge_norm(enum blas_order_type order, enum blas_norm_type norm, int m, int n, const REAL *a, int lda, REAL *res)
-{
-	int i, j;
-	char rname[] = "BLAS_ge_norm";
-
-	if (order != blas_colmajor)
-		errx(1, "%s %d %d %d", rname, -1, order, 0);
-
-	if (norm == blas_frobenius_norm)
-	{
-		register float anorm = 0.0f;
-		for (j = n; j; --j)
-		{
-			for (i = m; i; --i)
-			{
-				anorm += a[0] * a[0];
-				a++;
-			}
-			a += lda - m;
-		}
-
-		if (res)
-			*res = sqrt(anorm);
-	}
-	else if (norm == blas_inf_norm)
-	{
-		float anorm = 0.0f;
-		for (i = 0; i < m; ++i)
-		{
-			register float v = 0.0f;
-			for (j = 0; j < n; ++j)
-				v += abs(a[i + j * lda]);
-
-			if (anorm < v)
-				anorm = v;
-		}
-
-		if (res)
-			*res = anorm;
-	}
-	else
-		errx(1, "%s %d %d %d", rname, -2, norm, 0);
-}
-
-
-static REAL
-BLAS_dpow_di(REAL x, int n)
-{
-	REAL rv = 1.0;
-
-	if (n < 0)
-	{
-		n = -n;
-		x = 1.0 / x;
-	}
-
-	for (; n; n >>= 1, x *= x)
-		if (n & 1)
-			rv *= x;
-
-	return rv;
-}
-
-
-static REAL
-BLAS_dfpinfo(enum blas_cmach_type cmach)
-{
-	REAL eps = 1.0, r = 1.0, o = 1.0, b = 2.0;
-	int t = 53, l = 1024, m = -1021;
-	char rname[] = "BLAS_dfpinfo";
-
-	if (sizeof(eps) == sizeof(float))
-	{
-		t = 24;
-		l = 128;
-		m = -125;
-	}
-	else
-	{
-		t = 53;
-		l = 1024;
-		m = -1021;
-	}
-
-	/* for (i = 0; i < t; ++i) eps *= half; */
-	eps = BLAS_dpow_di(b, -t);
-	/* for (i = 0; i >= m; --i) r *= half; */
-	r = BLAS_dpow_di(b, m - 1);
-
-	o -= eps;
-	/* for (i = 0; i < l; ++i) o *= b; */
-	o *= BLAS_dpow_di(b, l - 1) * b;
-
-	switch (cmach)
-	{
-		case blas_eps: return eps;
-		case blas_sfmin: return r;
-		default: errx(1, "%s %d %d %d", rname, -1, cmach, 0);
-	}
-
-	return 0.0;
-}
 
 
 void add_to_diag_hierarchical(REAL **matrix, int ts, int nt, float alpha)
@@ -452,65 +314,6 @@ static void inf_norm_sym(int N, REAL *A, REAL *norm, char uplo)
 	free(work);
 }
 
-
-/*------------------------------------------------------------------------
- *  Robust Check the factorization of the matrix A2
- */
-static int check_factorization(int N, REAL *A1, REAL *A2, char uplo, REAL eps)
-{
-	int i, j;
-	char LE = 'L', TR = 'T', NU = 'N', RI = 'R';
-
-	REAL *L2       = calloc(N * N, sizeof(REAL));
-	REAL *work     = calloc(N, sizeof(REAL));
-	REAL alpha     = 1.0;
-
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, N, N, A1, N, &Anorm);
-	REAL Anorm = 0., Rnorm = 0.;
-	inf_norm(N, A1, &Anorm);
-
-	#pragma omp task inout([N * N]A2)
-	{
-		/* Dealing with L'L or U'U  */
-		LAPACK(lacpy)(&uplo, &N, &N, A2, &N, L2, &N);
-
-		if (uplo == 'U')
-			/* L2 = 1 * A2^T * L2 */
-			LAPACK(trmm)(&LE, &uplo, &TR, &NU, &N, &N, &alpha, A2, &N, L2, &N);
-		else
-			/* L2 = 1 * L2 * A2^T */
-			LAPACK(trmm)(&RI, &uplo, &TR, &NU, &N, &N, &alpha, A2, &N, L2, &N);
-	}
-
-	#pragma omp task in([N * N]A2) inout([N * N]A1)
-	{
-		/* Compute the residual || A - L'L || */
-		for (i = 0; i < N; i++)
-			for (j = 0; j < N; j++)
-				A1[j * N + i] -= L2[j * N + i];
-	}
-
-	inf_norm(N, A1, &Rnorm);
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, N, N, A1, N, &Rnorm);
-
-	#pragma omp taskwait noflush
-
-	free(L2);
-	free(work);
-
-	printf("============\n");
-	printf("Checking the Cholesky Factorization \n");
-	printf("-- ||L'L-A||_inf/(||A||_inf.N.eps) = %e\n", Rnorm / (Anorm * N * eps));
-
-	int info_factorization = isnan(Rnorm / (Anorm * N * eps)) || isinf(Rnorm / (Anorm * N * eps)) || (Rnorm / (Anorm * N * eps) > 60.0);
-
-	if (info_factorization)
-		printf("-- Factorization is suspicious ! \n");
-	else
-		printf("-- Factorization is CORRECT ! \n");
-
-	return info_factorization;
-}
 
 
 static void convert_to_blocks(int ts, int DIM, int N, REAL   Alin[N][N], REAL *A[DIM][DIM]);
@@ -1051,8 +854,8 @@ int main(int argc, char *argv[])
 
 	#pragma omp taskwait noflush
 
-	char uplo = 'L';
-	REAL eps = BLAS_dfpinfo(blas_eps);
+	char uplo = 'L', e = 'E';
+	REAL eps = LAPACK(lamch)(&e);
 	// check_inverse(nt, ts, n, Ah, matrix, uplo, eps);
 	check_inverse_blocked(nt, ts, n, Ah, matrix, uplo, eps);
 

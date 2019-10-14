@@ -204,6 +204,7 @@ void LAPACK(potrf)(const char *uplo, const int *n, REAL *a, const int *lda, LONG
 void LAPACK(trsm)(char *side, char *uplo, char *transa, char *diag, const int *m, const int *n, REAL *alpha, REAL *a, const int *lda, REAL *b, const int *ldb);
 void LAPACK(trmm)(char *side, char *uplo, char *transa, char *diag, const int *m, const int *n, REAL *alpha, REAL *a, const int *lda, REAL *b, const int *ldb);
 void LAPACK(syrk)(char *uplo, char *trans, const int *n, const int *k, REAL *alpha, REAL *a, const int *lda, REAL *beta, REAL *c, const int *ldc);
+REAL LAPACK(lamch)(char *info);
 
 float get_time();
 static int check_factorization(int, REAL *, REAL *, char, REAL);
@@ -212,145 +213,6 @@ static int check_factorization(int, REAL *, REAL *, char, REAL);
 void gpu_spotrf_var1_(char *, int *, unsigned int *, int *, int *, int *);
 
 void cholesky(const int n, const int nt, const int ts, REAL (*Alin)[n], REAL (*(*Ah)[nt])[ts]);
-
-
-enum blas_order_type
-{
-	blas_rowmajor = 101,
-	blas_colmajor = 102
-};
-
-enum blas_cmach_type
-{
-	blas_base      = 151,
-	blas_t         = 152,
-	blas_rnd       = 153,
-	blas_ieee      = 154,
-	blas_emin      = 155,
-	blas_emax      = 156,
-	blas_eps       = 157,
-	blas_prec      = 158,
-	blas_underflow = 159,
-	blas_overflow  = 160,
-	blas_sfmin     = 161
-};
-
-enum blas_norm_type
-{
-	blas_one_norm       = 171,
-	blas_real_one_norm  = 172,
-	blas_two_norm       = 173,
-	blas_frobenius_norm = 174,
-	blas_inf_norm       = 175,
-	blas_real_inf_norm  = 176,
-	blas_max_norm       = 177,
-	blas_real_max_norm  = 178
-};
-
-
-static void __attribute__((unused))
-BLAS_ge_norm(enum blas_order_type order, enum blas_norm_type norm, int m, int n, const REAL *a, int lda, REAL *res)
-{
-	int i, j;
-	char rname[] = "BLAS_ge_norm";
-
-	if (order != blas_colmajor)
-		errx(1, "%s %d %d %d", rname, -1, order, 0);
-
-	if (norm == blas_frobenius_norm)
-	{
-		register float anorm = 0.0f;
-		for (j = n; j; --j)
-		{
-			for (i = m; i; --i)
-			{
-				anorm += a[0] * a[0];
-				a++;
-			}
-			a += lda - m;
-		}
-
-		if (res)
-			*res = sqrt(anorm);
-	}
-	else if (norm == blas_inf_norm)
-	{
-		float anorm = 0.0f;
-		for (i = 0; i < m; ++i)
-		{
-			register float v = 0.0f;
-			for (j = 0; j < n; ++j)
-				v += abs(a[i + j * lda]);
-
-			if (anorm < v)
-				anorm = v;
-		}
-
-		if (res)
-			*res = anorm;
-	}
-	else
-		errx(1, "%s %d %d %d", rname, -2, norm, 0);
-}
-
-
-static REAL
-BLAS_dpow_di(REAL x, int n)
-{
-	REAL rv = 1.0;
-
-	if (n < 0)
-	{
-		n = -n;
-		x = 1.0 / x;
-	}
-
-	for (; n; n >>= 1, x *= x)
-		if (n & 1)
-			rv *= x;
-
-	return rv;
-}
-
-
-static REAL
-BLAS_dfpinfo(enum blas_cmach_type cmach)
-{
-	REAL eps = 1.0, r = 1.0, o = 1.0, b = 2.0;
-	int t = 53, l = 1024, m = -1021;
-	char rname[] = "BLAS_dfpinfo";
-
-	if (sizeof(eps) == sizeof(float))
-	{
-		t = 24;
-		l = 128;
-		m = -125;
-	}
-	else
-	{
-		t = 53;
-		l = 1024;
-		m = -1021;
-	}
-
-	/* for (i = 0; i < t; ++i) eps *= half; */
-	eps = BLAS_dpow_di(b, -t);
-	/* for (i = 0; i >= m; --i) r *= half; */
-	r = BLAS_dpow_di(b, m - 1);
-
-	o -= eps;
-	/* for (i = 0; i < l; ++i) o *= b; */
-	o *= BLAS_dpow_di(b, l - 1) * b;
-
-	switch (cmach)
-	{
-		case blas_eps: return eps;
-		case blas_sfmin: return r;
-		default: errx(1, "%s %d %d %d", rname, -1, cmach, 0);
-	}
-
-	return 0.0;
-}
 
 
 void add_to_diag_hierarchical(REAL **matrix, const int ts, const int nt, float alpha)
@@ -400,24 +262,22 @@ float get_time()
 static int check_factorization(const int n, REAL *A1, REAL *A2, char uplo, REAL eps)
 {
 	int i, j;
-	char NORM = 'I', LE = 'L', TR = 'T', NU = 'N', RI = 'R';
+	char NORM = 'I', TR = 'T', NU = 'N';
 
 	REAL *L2       = calloc(n * n, sizeof(REAL));
 	REAL *work     = calloc(n, sizeof(REAL));
 	REAL alpha     = 1.0;
 
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, n, n, A1, n, &Anorm);
 	REAL Anorm = LAPACK(lange)(&NORM, &n, &n, A1, &n, work);
 
-	/* Dealing with L'L or U'U  */
+	// Copy A2 into L2
 	LAPACK(lacpy)(&uplo, &n, &n, A2, &n, L2, &n);
 
-	if (uplo == 'U')
-		/* L2 = 1 * A2^T * L2 */
-		LAPACK(trmm)(&LE, &uplo, &TR, &NU, &n, &n, &alpha, A2, &n, L2, &n);
-	else
-		/* L2 = 1 * L2 * A2^T */
-		LAPACK(trmm)(&RI, &uplo, &TR, &NU, &n, &n, &alpha, A2, &n, L2, &n);
+	// Now multiply into L2:
+	// either Left (L2 = 1 * A2^T * L2) for Upper triangular A2,
+	//    or Right (L2 = 1 * L2 * A2^T) for Lower triangular A2
+	char side = uplo == 'U' ? 'L' : 'R';
+	LAPACK(trmm)(&side, &uplo, &TR, &NU, &n, &n, &alpha, A2, &n, L2, &n);
 
 	/* Compute the residual || A - L'L || */
 	for (i = 0; i < n; i++)
@@ -425,7 +285,6 @@ static int check_factorization(const int n, REAL *A1, REAL *A2, char uplo, REAL 
 			A1[j * n + i] -= L2[j * n + i];
 
 	REAL Rnorm = LAPACK(lange)(&NORM, &n, &n, A1, &n, work);
-	//BLAS_ge_norm(blas_colmajor, blas_inf_norm, n, n, A1, n, &Rnorm);
 
 	free(L2);
 	free(work);
@@ -829,7 +688,8 @@ int main(int argc, char *argv[])
 	#pragma omp taskwait
 #endif
 
-	REAL eps = BLAS_dfpinfo(blas_eps);
+	char e = 'E';
+	REAL eps = LAPACK(lamch)(&e);
 	int info_factorization = check_factorization(n, (REAL*)original_matrix, (REAL*)matrix, 'L', eps);
 
 	float gflops = (1.0 / 3.0) * n * n * n / (time * 1e9);
