@@ -519,7 +519,6 @@ void inject_stop()
 	if (error == NULL)
 		return;
 
-	error->end_time = getns();
 	pthread_join(error->injector_thread, NULL);
 
 	/* Print whether we flipped anything or whether the inject region stopped earlier */
@@ -750,8 +749,10 @@ void stop_roi(int it)
 	static void (*real_stop_measure)(int) = NULL;
 	if (!real_stop_measure) real_stop_measure = dlsym(RTLD_NEXT, "stop_roi");
 
-	inject_stop();
+	if (error)
+		error->end_time = getns();
 	real_stop_measure(it);
+	inject_stop();
 }
 
 
@@ -760,8 +761,10 @@ void __parsec_roi_end()
 	static void (*real_roi_end)() = NULL;
 	if (!real_roi_end) real_roi_end = dlsym(RTLD_NEXT, "__parsec_roi_end");
 
-	inject_stop();
+	if (error)
+		error->end_time = getns();
 	real_roi_end();
+	inject_stop();
 }
 
 void start_roi () __attribute__ ((noinline, alias ("__parsec_roi_begin")));
