@@ -51,3 +51,8 @@ SuiteSparse was previously the *UF Sparse Matrix Collection* hosted at [https://
 5. D. Chasapis et al., “PARSECSs: Evaluating the Impact of Task Parallelism in the PARSEC Benchmark Suite,” ACM Transactions on Architecture and Code Optimization, vol. 12, no. 4, pp. 41:1–41:22, Dec. 2015.
 
 </small>
+
+### Licensing
+
+All codes are under their original license. This repository does not own any of the code and does not provide any warranties.
+Code written that is not part of any benchmark (under `nx_catch_tdg/`, `libcatchroi/`) is under LGPL v3.
